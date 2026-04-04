@@ -178,7 +178,7 @@ if ticker_input:
                     try:
                         # MOTOR ANCLADO EN 2.5-FLASH-LITE
                         response = client.models.generate_content(
-                            model="gemini-2.5-flash-lite", 
+                            model="gemini-3-flash", 
                             contents=prompt
                         )
                         st.markdown("---")
