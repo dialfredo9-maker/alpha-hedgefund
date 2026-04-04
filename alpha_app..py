@@ -107,7 +107,7 @@ if ticker:
                 prompt = f"ERES EL COMITÉ DE UN HEDGE FUND. ANALIZA BAJO MANDATO {m['Riesgo']}: {datos}. Usa formato con <u>Encabezados</u> y Veredictos por Agente."
                 try:
                     # Usamos 1.5 Flash para evitar el error 429
-                    response = client.models.generate_content(model="gemini-1.5-flash", contents=prompt)
+                    response = client.models.generate_content(model="gemini-2.5-flash-lite", contents=prompt)
                     st.markdown("---")
                     st.markdown(f"<div class='report-text'>{response.text}</div>", unsafe_allow_html=True)
                     
