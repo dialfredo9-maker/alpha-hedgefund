@@ -22,6 +22,7 @@ st.markdown("""
 
 # --- CONFIGURACIÓN DE APIS ---
 GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+# Luego sigues usando la variable normal
 client = genai.Client(api_key=GEMINI_API_KEY)
 CONFIG_FILE = "mandato_config.json"
 EXCEL_FILE = "Analisis_App_Alpha.xlsx"
