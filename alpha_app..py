@@ -20,7 +20,7 @@ st.markdown("""
 
 # --- CONECTIVIDAD ---
 # Usamos tu clave de API proporcionada
-GEMINI_API_KEY = "AIzaSyC_P204qmsG4Xq0hHfRC8TvVgy_hsssm50" 
+GEMINI_API_KEY = "AIzaSyCgSrdDfu4xx1n677G2FY2GmmNxVQjezHo" 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- UTILIDADES DE CÁLCULO V4.1 ---
@@ -178,7 +178,7 @@ if ticker_input:
                     try:
                         # MOTOR ANCLADO EN 2.5-FLASH-LITE
                         response = client.models.generate_content(
-                            model="gemini-3-flash", 
+                            model="gemini-2.5-flash-lite", 
                             contents=prompt
                         )
                         st.markdown("---")
