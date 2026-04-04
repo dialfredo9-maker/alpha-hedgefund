@@ -15,7 +15,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- API ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("AIzaSyCKlh0WwWhY6wdIWDvgTAdabUhJYPLCSIk")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 EXCEL_FILE = "Analisis_HedgeFund_V5.xlsx"
