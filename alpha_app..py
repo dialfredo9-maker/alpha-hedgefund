@@ -15,10 +15,10 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- API ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-if not GEMINI_API_KEY:
-    st.error("❌ API KEY no configurada")
+try:
+    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
+except:
+    st.error("❌ Falta configurar API KEY en secrets.toml")
     st.stop()
 
 client = genai.Client(api_key=GEMINI_API_KEY)
