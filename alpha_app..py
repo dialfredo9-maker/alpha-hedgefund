@@ -14,14 +14,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- API ---
-try:
-    GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
-except:
-    st.error("❌ Falta configurar API KEY en secrets.toml")
-    st.stop()
+# --- API (VERSIÓN FÁCIL) ---
+st.sidebar.markdown("### 🔑 Configuración API")
 
-client = genai.Client(api_key=GEMINI_API_KEY)
+GEMINI_API_KEY = st.sidebar.text_input(
+    "Ingresa tu API Key de Gemini",
+    type="password"
+)
+
+client = None
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 EXCEL_FILE = "Analisis_HedgeFund_V5.xlsx"
 
@@ -94,6 +97,9 @@ m = st.session_state.mandato
 
 # --- IA ---
 def analizar_v5_ia(d, m):
+    if not client:
+        return "⚠️ IA desactivada (sin API KEY). Usa snapshot + alertas."
+
     prompt = f"""
     ERES UN COMITÉ DE INVERSIÓN INSTITUCIONAL.
 
@@ -248,7 +254,7 @@ if ticker:
                         if "429" in error_str:
                             st.error("🚫 Límite de IA alcanzado")
                         elif "403" in error_str:
-                            st.error("🔑 API KEY inválida o filtrada. Genera una nueva.")
+                            st.error("🔑 API KEY inválida o filtrada")
                         else:
                             st.error(f"Error IA: {e}")
 
