@@ -18,7 +18,7 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 # --- CONFIGURACIÓN ---
-GEMINI_API_KEY = "AIzaSyCxbTsTBKXYPGEZW8gT4JLHm7XBvl27eII" 
+GEMINI_API_KEY = "AIzaSyC_P204qmsG4Xq0hHfRC8TvVgy_hsssm50" 
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- LÓGICA V4.1 RESPETADA AL 100% ---
