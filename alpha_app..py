@@ -15,7 +15,12 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- API ---
-GEMINI_API_KEY = os.getenv("AIzaSyCKlh0WwWhY6wdIWDvgTAdabUhJYPLCSIk")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if not GEMINI_API_KEY:
+    st.error("❌ API KEY no configurada")
+    st.stop()
+
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 EXCEL_FILE = "Analisis_HedgeFund_V5.xlsx"
@@ -87,7 +92,7 @@ with st.sidebar:
 
 m = st.session_state.mandato
 
-# --- IA V5 ---
+# --- IA ---
 def analizar_v5_ia(d, m):
     prompt = f"""
     ERES UN COMITÉ DE INVERSIÓN INSTITUCIONAL.
@@ -133,7 +138,7 @@ def analizar_v5_ia(d, m):
     """
 
     return client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         contents=prompt
     ).text
 
@@ -227,38 +232,48 @@ if ticker:
                 else:
                     st.success("🟢 Sin alertas críticas")
 
-                # --- IA (CON CACHE + CONTROL ERROR) ---
+                # --- IA ---
                 with st.spinner("Analizando con IA..."):
-
-                    if data == st.session_state.ultimo_input:
-                        res = st.session_state.ultimo_resultado
-                    else:
-                        try:
+                    try:
+                        if data == st.session_state.ultimo_input:
+                            res = st.session_state.ultimo_resultado
+                        else:
                             res = analizar_v5_ia(data, m)
                             st.session_state.ultimo_input = data
                             st.session_state.ultimo_resultado = res
 
-                        except Exception as e:
-                            if "429" in str(e):
-                                st.error("🚫 Límite de IA alcanzado. Espera o intenta más tarde.")
-                                res = "⚠️ Análisis no disponible por límite de API."
-                            else:
-                                st.error(f"Error IA: {e}")
-                                res = "⚠️ Error en análisis IA"
+                    except Exception as e:
+                        error_str = str(e)
+
+                        if "429" in error_str:
+                            st.error("🚫 Límite de IA alcanzado")
+                        elif "403" in error_str:
+                            st.error("🔑 API KEY inválida o filtrada. Genera una nueva.")
+                        else:
+                            st.error(f"Error IA: {e}")
+
+                        res = "⚠️ Análisis IA no disponible. Usa snapshot + alertas."
 
                 st.markdown("### 🧠 Informe del Comité")
                 st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
 
                 # --- GUARDAR ---
-                df = pd.DataFrame([{**data, "IA": res}])
+                try:
+                    df = pd.DataFrame([{**data, "IA": res}])
 
-                if os.path.exists(EXCEL_FILE):
-                    df_old = pd.read_excel(EXCEL_FILE)
-                    df = pd.concat([df_old, df], ignore_index=True)
+                    if os.path.exists(EXCEL_FILE):
+                        try:
+                            df_old = pd.read_excel(EXCEL_FILE)
+                            df = pd.concat([df_old, df], ignore_index=True)
+                        except:
+                            pass
 
-                df.to_excel(EXCEL_FILE, index=False)
+                    df.to_excel(EXCEL_FILE, index=False)
 
-                st.success("✅ Guardado en Excel")
+                    st.success("✅ Guardado en Excel")
+
+                except:
+                    st.warning("⚠️ No se pudo guardar en Excel (instala openpyxl)")
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
