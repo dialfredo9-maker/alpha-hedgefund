@@ -61,6 +61,12 @@ if 'mandato' not in st.session_state:
         "Peso_CAGR": 1.2
     }
 
+# --- CACHE IA ---
+if "ultimo_input" not in st.session_state:
+    st.session_state.ultimo_input = None
+if "ultimo_resultado" not in st.session_state:
+    st.session_state.ultimo_resultado = None
+
 with st.sidebar:
     st.title("📜 Mandato")
 
@@ -127,7 +133,7 @@ def analizar_v5_ia(d, m):
     """
 
     return client.models.generate_content(
-        model="gemini-2.5-flash-lite",
+        model="gemini-2.5-flash",
         contents=prompt
     ).text
 
@@ -221,9 +227,24 @@ if ticker:
                 else:
                     st.success("🟢 Sin alertas críticas")
 
-                # --- IA ---
+                # --- IA (CON CACHE + CONTROL ERROR) ---
                 with st.spinner("Analizando con IA..."):
-                    res = analizar_v5_ia(data, m)
+
+                    if data == st.session_state.ultimo_input:
+                        res = st.session_state.ultimo_resultado
+                    else:
+                        try:
+                            res = analizar_v5_ia(data, m)
+                            st.session_state.ultimo_input = data
+                            st.session_state.ultimo_resultado = res
+
+                        except Exception as e:
+                            if "429" in str(e):
+                                st.error("🚫 Límite de IA alcanzado. Espera o intenta más tarde.")
+                                res = "⚠️ Análisis no disponible por límite de API."
+                            else:
+                                st.error(f"Error IA: {e}")
+                                res = "⚠️ Error en análisis IA"
 
                 st.markdown("### 🧠 Informe del Comité")
                 st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
