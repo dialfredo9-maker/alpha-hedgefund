@@ -2,19 +2,35 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
+import requests
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V8 FIX", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V7", layout="wide")
 
-# --- API ---
-st.sidebar.markdown("### 🔑 API Gemini")
-API_KEY = st.sidebar.text_input("API KEY", type="password")
+st.markdown("""
+<style>
+.report-box { font-family: 'Courier New'; background-color: #0d1117; padding: 25px; border-radius: 10px; border: 1px solid #30363d; color: #c9d1d9; }
+</style>
+""", unsafe_allow_html=True)
 
-client = genai.Client(api_key=API_KEY) if API_KEY else None
+# --- API KEYS ---
+st.sidebar.markdown("### 🔑 API KEYS")
+
+GEMINI_API_KEY = st.sidebar.text_input("Gemini API", type="password")
+FMP_API_KEY = st.sidebar.text_input("FMP API", type="password")
+
+client = None
+if GEMINI_API_KEY:
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- UTILIDADES ---
-def safe_div(n, d):
+def safe(x):
+    if x is None or x == "N/D":
+        return None
+    return x
+
+def division_segura(n, d):
     try:
         if n is None or d is None or d == 0:
             return None
@@ -22,66 +38,96 @@ def safe_div(n, d):
     except:
         return None
 
-def pct(x):
+def to_pct(x):
     return None if x is None else round(x * 100, 2)
 
-# --- ROIC ROBUSTO ---
-def calcular_roic(income, balance):
+# --- FMP FETCH ---
+def get_fmp_data(ticker):
     try:
-        try:
-            ebit = income.loc['Operating Income'].dropna()[0]
-        except:
-            ebit = income.loc['EBIT'].dropna()[0]
+        url = f"https://financialmodelingprep.com/api/v3/key-metrics/{ticker}?limit=1&apikey={FMP_API_KEY}"
+        r = requests.get(url).json()[0]
 
-        debt = balance.loc['Total Debt'].dropna()[0]
-        equity = balance.loc['Total Stockholder Equity'].dropna()[0]
-
-        return safe_div(ebit, debt + equity)
+        return {
+            "roic": r.get("roic"),
+            "net_debt": r.get("netDebtToEBITDA"),
+            "pe": r.get("peRatio")
+        }
     except:
+        return {}
+
+# --- BACKLOG → FCF ---
+def calcular_backlog_fcf(backlog_b, margen, tipo):
+    """
+    backlog_b: en BILLIONS
+    margen: %
+    """
+    if backlog_b is None or margen is None:
         return None
 
-# --- SBC DINÁMICO ---
-def calcular_sbc(cf):
-    try:
-        for key in cf.index:
-            if "Stock" in key and "Compensation" in key:
-                return cf.loc[key].dropna()[0]
-    except:
-        pass
-    return None
+    backlog_usd = backlog_b * 1e9
 
-# --- NET DEBT ROBUSTO ---
-def calcular_net_debt(balance):
-    try:
-        try:
-            debt = balance.loc['Total Debt'].dropna()[0]
-        except:
-            debt = 0
+    if tipo == "Software":
+        conversion = 0.85
+    else:
+        conversion = 0.6
 
-        try:
-            cash = balance.loc['Cash And Cash Equivalents'].dropna()[0]
-        except:
-            cash = 0
+    return backlog_usd * conversion * (margen / 100)
 
-        return debt - cash
-    except:
+# --- FORWARD MODEL ---
+def modelo_forward(ev, fcf_actual, backlog_fcf):
+    if fcf_actual is None:
+        return {}
+
+    fcf_forward = fcf_actual + (backlog_fcf or 0)
+
+    ev_fcf_forward = division_segura(ev, fcf_forward)
+
+    return {
+        "FCF_Forward": fcf_forward,
+        "EV_FCF_Forward": ev_fcf_forward
+    }
+
+# --- PEG REAL ---
+def calcular_peg(ev_fcf_forward, cagr):
+    if ev_fcf_forward is None or cagr is None or cagr == 0:
         return None
+    return ev_fcf_forward / cagr
 
-# --- PER (PIPELINE ECONÓMICO REAL) ---
-def calcular_per(tipo, backlog, revenue, cagr, margin, conv):
-    backlog_usd = backlog * 1e9  # 🔥 FIX CRÍTICO
+# --- IA ---
+def analizar_ia(data):
+    if not client:
+        return "⚠️ IA desactivada"
 
-    if tipo == "Físico":
-        return backlog_usd * conv * margin
+    prompt = f"""
+    COMITÉ INSTITUCIONAL BUY-SIDE.
 
-    elif tipo == "Software":
-        rev_fut = revenue * (1 + cagr)
-        return rev_fut * margin
+    DATOS YA PROCESADOS:
+    {data}
 
-    return 0
+    TAREAS:
+    - Evaluar si el crecimiento justifica la valoración
+    - Detectar riesgo de múltiplos
+    - Validar backlog como fuente real de FCF
+    - Confirmar o rechazar tesis
+
+    OUTPUT:
+    IDENTIDAD:
+    ...
+    VALUACIÓN:
+    ...
+    RIESGO:
+    ...
+    CONCLUSIÓN:
+    ...
+    """
+
+    return client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V8 FIX")
+st.title("🔬 Alpha Boardroom V7")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -92,11 +138,11 @@ if ticker:
         inf = tk.info
         inc = tk.financials
         cf = tk.cashflow
-        bal = tk.balance_sheet
 
         if inc.empty or cf.empty:
             st.error("❌ Datos incompletos")
         else:
+            # --- FUNDAMENTALES ---
             rev = inc.loc['Total Revenue'].dropna()[::-1]
             fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
 
@@ -105,117 +151,80 @@ if ticker:
             fcf_ltm = fcf.iloc[-1]
             rev_ltm = rev.iloc[-1]
 
-            fcf_margin = safe_div(fcf_ltm, rev_ltm)
-
             ev = inf.get("enterpriseValue")
-            ev_fcf = safe_div(ev, fcf_ltm)
 
+            ev_fcf = division_segura(ev, fcf_ltm)
+            fcf_margin = division_segura(fcf_ltm, rev_ltm)
+
+            # --- HISTÓRICO ---
             hist = tk.history(period="5y")
             price_cagr = None
+
             if not hist.empty:
                 price_cagr = (hist["Close"].iloc[-1] / hist["Close"].iloc[0])**(1/5) - 1
 
-            # --- NUEVAS MÉTRICAS ---
-            roic = calcular_roic(inc, bal)
-            sbc = calcular_sbc(cf)
-            net_debt = calcular_net_debt(bal)
+            # --- FMP ---
+            fmp = get_fmp_data(ticker) if FMP_API_KEY else {}
 
+            # --- UI CORE ---
             st.subheader(inf.get("longName"))
 
-            # --- CORE ---
-            st.markdown("### 📊 Core")
-            st.write({
-                "EV/FCF": round(ev_fcf, 2) if ev_fcf else None,
-                "CAGR %": pct(cagr),
-                "FCF Margin %": pct(fcf_margin)
-            })
+            col1, col2, col3 = st.columns(3)
+            col1.metric("EV/FCF", round(ev_fcf,2) if ev_fcf else None)
+            col2.metric("CAGR %", to_pct(cagr))
+            col3.metric("FCF Margin %", to_pct(fcf_margin))
 
-            # --- CALIDAD ---
-            st.markdown("### 🧠 Calidad / Riesgo")
-            st.write({
-                "ROIC %": pct(roic),
-                "SBC": sbc,
-                "Net Debt": net_debt
-            })
-
-            # --- INPUTS ---
+            # --- BACKLOG INPUT ---
             st.markdown("### ⚙️ Modelo Forward")
 
-            tipo = st.selectbox("Tipo empresa", ["Auto", "Físico", "Software"])
+            colA, colB, colC = st.columns(3)
 
-            backlog = st.number_input("Backlog (B USD)", value=0.0)
-            conv = st.slider("Conversión backlog %", 50, 100, 85) / 100
+            with colA:
+                tipo = st.selectbox("Tipo empresa", ["Físico", "Software"])
 
-            if tipo == "Auto":
-                if fcf_margin and fcf_margin > 0.25:
-                    tipo = "Software"
-                else:
-                    tipo = "Físico"
+            with colB:
+                backlog_b = st.number_input("Backlog (Billions USD)", value=0.0)
 
-            # --- CÁLCULOS ---
-            per = calcular_per(tipo, backlog, rev_ltm, cagr or 0, fcf_margin or 0, conv)
+            with colC:
+                margen = st.number_input("Margen FCF (%)", value=float(to_pct(fcf_margin) or 0))
 
-            fcf_fwd = fcf_ltm + per if fcf_ltm else None
+            if st.button("Analizar"):
 
-            ev_fcf_fwd = safe_div(ev, fcf_fwd)
+                backlog_fcf = calcular_backlog_fcf(backlog_b, margen, tipo)
 
-            # 🔥 FIX PEG
-            peg = safe_div(ev_fcf_fwd, (cagr * 100)) if cagr else None
+                forward = modelo_forward(ev, fcf_ltm, backlog_fcf)
 
-            # --- VALIDACIONES ---
-            if peg and peg > 5:
-                st.warning("⚠️ PEG extremo → revisar modelo o sobrevaloración")
+                peg = calcular_peg(forward.get("EV_FCF_Forward"), cagr)
 
-            if fcf_margin and fcf_margin < 0:
-                st.error("🚨 FCF negativo → modelo no válido")
+                data = {
+                    "EV_FCF": ev_fcf,
+                    "CAGR": to_pct(cagr),
+                    "FCF_Margin": to_pct(fcf_margin),
+                    "CAGR_5Y_Price": to_pct(price_cagr),
+                    "ROIC": fmp.get("roic"),
+                    "NetDebt": fmp.get("net_debt"),
+                    "Backlog_FCF": backlog_fcf,
+                    "EV_FCF_Forward": forward.get("EV_FCF_Forward"),
+                    "PEG": peg
+                }
 
-            # --- OUTPUT ---
-            st.markdown("### 📈 Modelo Forward")
-            st.write({
-                "PER_FCF": round(per, 2),
-                "FCF Forward": round(fcf_fwd, 2) if fcf_fwd else None,
-                "EV/FCF Forward": round(ev_fcf_fwd, 2) if ev_fcf_fwd else None,
-                "PEG_FCF": round(peg, 2) if peg else None
-            })
+                st.markdown("### 📈 Modelo Forward")
 
-            # --- IA ---
-            if st.button("🧠 Analizar"):
-                if not client:
-                    st.warning("⚠️ IA desactivada (sin API)")
-                else:
-                    prompt = f"""
-                    ERES UN COMITÉ INSTITUCIONAL.
+                st.json({
+                    "FCF Forward": forward.get("FCF_Forward"),
+                    "EV/FCF Forward": forward.get("EV_FCF_Forward"),
+                    "PEG": peg
+                })
 
-                    DATOS PROCESADOS:
-                    EV/FCF: {ev_fcf}
-                    EV/FCF Forward: {ev_fcf_fwd}
-                    CAGR: {cagr}
-                    ROIC: {roic}
-                    SBC: {sbc}
-                    Net Debt: {net_debt}
-                    PEG: {peg}
-
-                    REGLAS:
-                    - NO recalcular
-                    - SOLO interpretar
-                    - evaluar si es value trap o compounder
-
-                    OUTPUT:
-                    IDENTIDAD
-                    VALUACIÓN
-                    RIESGO
-                    VEREDICTO
-                    SIZING
-                    """
-
+                # --- IA ---
+                with st.spinner("IA..."):
                     try:
-                        res = client.models.generate_content(
-                            model="gemini-2.5-flash",
-                            contents=prompt
-                        )
-                        st.markdown(res.text)
+                        res = analizar_ia(data)
                     except Exception as e:
-                        st.error(f"Error IA: {e}")
+                        res = f"⚠️ Error IA: {e}"
+
+                st.markdown("### 🧠 Informe")
+                st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
 
     except Exception as e:
-        st.error(f"Error general: {e}")
+        st.error(f"Error: {e}")
