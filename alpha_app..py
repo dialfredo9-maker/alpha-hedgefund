@@ -6,7 +6,7 @@ import os
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V5", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V6.5", layout="wide")
 
 st.markdown("""
 <style>
@@ -14,19 +14,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- API (VERSIÓN FÁCIL) ---
+# --- API ---
 st.sidebar.markdown("### 🔑 Configuración API")
-
-GEMINI_API_KEY = st.sidebar.text_input(
-    "Ingresa tu API Key de Gemini",
-    type="password"
-)
+GEMINI_API_KEY = st.sidebar.text_input("Ingresa tu API Key", type="password")
 
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-EXCEL_FILE = "Analisis_HedgeFund_V5.xlsx"
+EXCEL_FILE = "Analisis_HedgeFund_V6.xlsx"
 
 # --- UTILIDADES ---
 def division_segura(n, d):
@@ -57,40 +53,61 @@ def generar_alertas(data, mandato):
 
     if data["CAGR_Precio_5Y"] and data["CAGR"]:
         if data["CAGR_Precio_5Y"] > data["CAGR"] * 1.5:
-            alertas.append("🔴 Expansión de múltiplos (precio > fundamentos)")
+            alertas.append("🔴 Expansión de múltiplos")
 
     return alertas
 
-# --- 🔥 NUEVO: CLASIFICADOR V6 ---
+# --- 🧠 CLASIFICADOR ---
 def clasificar_empresa(data):
-    try:
-        cagr = data["CAGR"]
-        price_cagr = data["CAGR_Precio_5Y"]
-        fcf_margin = data["FCF_Margin"]
+    cagr = data["CAGR"]
+    price_cagr = data["CAGR_Precio_5Y"]
+    fcf_margin = data["FCF_Margin"]
 
-        if cagr is None or price_cagr is None or fcf_margin is None:
-            return "⚪ Datos insuficientes"
+    if cagr is None or price_cagr is None or fcf_margin is None:
+        return "⚪ Datos insuficientes"
 
-        # 🟢 COMPOUNDER
-        if cagr > 8 and fcf_margin > 15 and abs(price_cagr - cagr) < 5:
-            return "🟢 Compounder sano"
+    if cagr > 8 and fcf_margin > 15 and abs(price_cagr - cagr) < 5:
+        return "🟢 Compounder sano"
 
-        # 🔵 HIPERCRECIMIENTO
-        if cagr > 20 and price_cagr > cagr:
-            return "🔵 Hipercrecimiento"
+    if cagr > 20 and price_cagr > cagr:
+        return "🔵 Hipercrecimiento"
 
-        # 🟡 TURNAROUND
-        if cagr > 5 and price_cagr < 0:
-            return "🟡 Turnaround"
+    if cagr > 5 and price_cagr < 0:
+        return "🟡 Turnaround"
 
-        # 🔴 VALUE TRAP
-        if cagr < 5 and price_cagr < 0:
-            return "🔴 Value trap"
+    if cagr < 5 and price_cagr < 0:
+        return "🔴 Value trap"
 
-        return "⚪ Neutral"
+    return "⚪ Neutral"
 
-    except:
-        return "⚪ Error clasificación"
+# --- 🚨 ANTI TRAMPA ALCISTA ---
+def detectar_trampa(data):
+    if data["EV_FCF"] and data["CAGR"] and data["CAGR_Precio_5Y"]:
+        if data["EV_FCF"] < 12 and data["CAGR"] < 15 and data["CAGR_Precio_5Y"] < 0:
+            return True
+    return False
+
+# --- 💰 SIZING ---
+def calcular_sizing(data, clasificacion, trampa):
+    base = 0
+
+    if clasificacion == "🟢 Compounder sano":
+        base = 0.25
+    elif clasificacion == "🔵 Hipercrecimiento":
+        base = 0.20
+    elif clasificacion == "🟡 Turnaround":
+        base = 0.15
+    elif clasificacion == "🔴 Value trap":
+        base = 0.05
+
+    # Ajustes
+    if trampa:
+        base *= 0.5
+
+    if data["FCF_Margin"] and data["FCF_Margin"] > 30:
+        base += 0.05
+
+    return round(base * 100, 1)
 
 # --- MANDATO ---
 if 'mandato' not in st.session_state:
@@ -100,7 +117,7 @@ if 'mandato' not in st.session_state:
         "Peso_CAGR": 1.2
     }
 
-# --- CACHE IA ---
+# --- CACHE ---
 if "ultimo_input" not in st.session_state:
     st.session_state.ultimo_input = None
 if "ultimo_resultado" not in st.session_state:
@@ -127,54 +144,38 @@ with st.sidebar:
 m = st.session_state.mandato
 
 # --- IA ---
-def analizar_v5_ia(d, m, clasificacion):
+def analizar_v6_ia(d, m, clasificacion, sizing, trampa):
     if not client:
-        return "⚠️ IA desactivada (sin API KEY). Usa snapshot + alertas."
+        return "⚠️ IA desactivada"
 
     prompt = f"""
-    ERES UN COMITÉ DE INVERSIÓN INSTITUCIONAL.
+    COMITÉ INSTITUCIONAL.
 
-    MANDATO:
-    {m}
+    MANDATO: {m}
 
-    DATOS:
-    {d}
+    DATOS: {d}
 
-    CLASIFICACIÓN PRELIMINAR:
-    {clasificacion}
+    CLASIFICACIÓN: {clasificacion}
+    SIZING PROPUESTO: {sizing}%
+    POSIBLE TRAMPA: {trampa}
 
     REGLAS:
-    - No ignores datos
-    - Usa CAGR vs EV/FCF
-    - Usa histórico 5 años
-    - Detecta expansión de múltiplos
-    - CONFIRMA o REFUTA la clasificación preliminar
+    - CONFIRMA o REFUTA la clasificación
+    - EVALÚA si es value trap
+    - VALIDA el sizing (puedes ajustarlo)
 
     OUTPUT:
-
     IDENTIDAD:
     ...
-
     GARP:
-    Score:
-    Veredicto:
-    Razón:
-
+    ...
     VALUACIÓN:
-    Estado:
-    Razón:
-
-    MACRO:
-    Veredicto:
-    Razón:
-
+    ...
     RIESGO:
-    Nivel:
-    Razón:
-
+    ...
     FINAL:
-    Score:
     Veredicto:
+    Sizing recomendado:
     Plan:
     """
 
@@ -184,7 +185,7 @@ def analizar_v5_ia(d, m, clasificacion):
     ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V5")
+st.title("🔬 Alpha Boardroom V6.5")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -197,9 +198,8 @@ if ticker:
         cf = tk.cashflow
 
         if inc.empty or cf.empty:
-            st.error("❌ Datos financieros incompletos")
+            st.error("❌ Datos incompletos")
         else:
-            # --- FUNDAMENTALES ---
             rev = inc.loc['Total Revenue'].dropna()[::-1]
             fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
 
@@ -212,11 +212,6 @@ if ticker:
             ev_fcf = division_segura(ev, fcf_ltm)
             fcf_margin = division_segura(fcf_ltm, rev_ltm)
 
-            # --- CAPEX ---
-            capex = cf.loc['Capital Expenditure'].abs().dropna()[::-1]
-            ciclo = "EXPANSIÓN" if capex.iloc[-1] > capex.mean() * 1.3 else "MANTENIMIENTO"
-
-            # --- HISTÓRICO ---
             hist = tk.history(period="5y")
 
             if not hist.empty:
@@ -228,99 +223,42 @@ if ticker:
 
             st.subheader(inf.get("longName"))
 
-            # --- SNAPSHOT ---
-            st.markdown("### 📊 Snapshot Rápido")
-
             col1, col2, col3 = st.columns(3)
             col1.metric("EV/FCF", ev_fcf)
             col2.metric("CAGR %", to_pct(cagr))
             col3.metric("FCF Margin %", to_pct(fcf_margin))
 
-            # --- INPUTS ---
-            colA, colB = st.columns(2)
-
-            with colA:
-                bn = st.number_input("Backlog (B)", value=0.0)
-                m_sotp = st.number_input("Margen FCF (%)", value=float(to_pct(fcf_margin) or 0))
-
-            with colB:
-                ctx = st.text_area("Contexto")
-
             if st.button("Analizar"):
-                br = bn * (m_sotp / 100)
 
                 data = {
                     "Ticker": ticker,
                     "EV_FCF": ev_fcf,
                     "CAGR": to_pct(cagr),
                     "FCF_Margin": to_pct(fcf_margin),
-                    "Precio_Actual": price_now,
-                    "Precio_5Y": price_5y,
-                    "CAGR_Precio_5Y": to_pct(price_cagr),
-                    "Ciclo": ciclo,
-                    "Backlog": bn,
-                    "Backlog_Real": br,
-                    "Contexto": ctx
+                    "CAGR_Precio_5Y": to_pct(price_cagr)
                 }
 
-                # --- 🔥 CLASIFICACIÓN ---
                 clasificacion = clasificar_empresa(data)
+                trampa = detectar_trampa(data)
+                sizing = calcular_sizing(data, clasificacion, trampa)
 
-                st.markdown("### 🧭 Clasificación del Activo")
+                st.markdown("### 🧭 Clasificación")
                 st.info(clasificacion)
 
-                # --- ALERTAS ---
-                alertas = generar_alertas(data, m)
+                if trampa:
+                    st.error("🚨 POSIBLE VALUE TRAP / TRAMPA DE MÚLTIPLOS")
 
-                if alertas:
-                    st.markdown("### 🚨 Alertas del Sistema")
-                    for a in alertas:
-                        st.warning(a)
-                else:
-                    st.success("🟢 Sin alertas críticas")
+                st.markdown("### 💰 Sizing sugerido")
+                st.success(f"{sizing}% del portafolio")
 
-                # --- IA ---
-                with st.spinner("Analizando con IA..."):
+                with st.spinner("IA..."):
                     try:
-                        if data == st.session_state.ultimo_input:
-                            res = st.session_state.ultimo_resultado
-                        else:
-                            res = analizar_v5_ia(data, m, clasificacion)
-                            st.session_state.ultimo_input = data
-                            st.session_state.ultimo_resultado = res
+                        res = analizar_v6_ia(data, m, clasificacion, sizing, trampa)
+                    except:
+                        res = "⚠️ IA no disponible"
 
-                    except Exception as e:
-                        error_str = str(e)
-
-                        if "429" in error_str:
-                            st.error("🚫 Límite de IA alcanzado")
-                        elif "403" in error_str:
-                            st.error("🔑 API KEY inválida o filtrada")
-                        else:
-                            st.error(f"Error IA: {e}")
-
-                        res = "⚠️ Análisis IA no disponible. Usa snapshot + alertas."
-
-                st.markdown("### 🧠 Informe del Comité")
+                st.markdown("### 🧠 Informe")
                 st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
 
-                # --- GUARDAR ---
-                try:
-                    df = pd.DataFrame([{**data, "Clasificacion": clasificacion, "IA": res}])
-
-                    if os.path.exists(EXCEL_FILE):
-                        try:
-                            df_old = pd.read_excel(EXCEL_FILE)
-                            df = pd.concat([df_old, df], ignore_index=True)
-                        except:
-                            pass
-
-                    df.to_excel(EXCEL_FILE, index=False)
-
-                    st.success("✅ Guardado en Excel")
-
-                except:
-                    st.warning("⚠️ No se pudo guardar en Excel (instala openpyxl)")
-
     except Exception as e:
-        st.error(f"❌ Error: {e}")
+        st.error(f"Error: {e}")
