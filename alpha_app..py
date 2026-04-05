@@ -6,7 +6,7 @@ import requests
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V9 Institucional", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V10 PRO", layout="wide")
 
 # --- API KEYS ---
 st.sidebar.title("🔑 APIs")
@@ -38,33 +38,28 @@ def get_fmp_data(ticker):
     except:
         return {}
 
-# --- SCORE DINÁMICO ---
-def calcular_score(data, tipo):
+# --- SCORE PRO ---
+def calcular_score(data):
     score = 0
 
-    # --- CALIDAD ---
-    if data["ROIC"] and data["ROIC"] > 0.15:
-        score += 2
     if data["FCF_Margin"] and data["FCF_Margin"] > 0.15:
         score += 2
-
-    # --- VALUACIÓN ---
+    if data["ROIC"] and data["ROIC"] > 0.15:
+        score += 2
     if data["EV_FCF"] and data["EV_FCF"] < 25:
+        score += 2
+    if data["PEG"] and 0 < data["PEG"] < 1.5:
         score += 2
     if data["FCF_Yield"] and data["FCF_Yield"] > 0.04:
         score += 2
 
-    # --- CRECIMIENTO ---
-    if data["CAGR"] and data["CAGR"] > 0.08:
-        score += 2
+    # Penalizaciones reales
+    if data["ROIC"] is None:
+        score -= 1
+    if data["PEG"] and data["PEG"] > 3:
+        score -= 1
 
-    # --- AJUSTE POR TIPO ---
-    if tipo == "Plataforma":
-        # penaliza menos FCF bajo si reinvierte
-        if data["Reinvestment"] and data["Reinvestment"] > 0.4:
-            score += 1
-
-    return min(score, 10)
+    return max(score, 0)
 
 def señal(score):
     if score >= 8:
@@ -75,25 +70,23 @@ def señal(score):
         return "🔴 SELL"
 
 # --- IA ---
-def analizar_ia(data, tipo):
+def analizar_ia(data):
     if not client:
         return "⚠️ IA desactivada"
 
     prompt = f"""
-    Eres comité institucional profesional.
-
-    Tipo empresa: {tipo}
+    Eres comité institucional.
 
     DATA:
     {data}
 
     Evalúa:
-    - Calidad REAL (ajustada por tipo)
+    - Calidad REAL
     - Valuación
-    - Riesgo real (no genérico)
+    - Riesgos reales (no genéricos)
     - Validación del score
 
-    Sé crítico y preciso.
+    Sé directo, crítico y profesional.
     """
 
     return client.models.generate_content(
@@ -102,7 +95,7 @@ def analizar_ia(data, tipo):
     ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V9 - Institucional")
+st.title("🔬 Alpha Boardroom V10 PRO")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -121,14 +114,20 @@ if ticker:
             st.error("❌ Datos insuficientes")
         else:
             rev = inc.loc['Total Revenue'].dropna()[::-1]
-            fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
+
+            # --- FCF robusto ---
+            if 'Free Cash Flow' in cf.index:
+                fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
+            else:
+                op_cf = cf.loc['Operating Cash Flow'].dropna()[::-1]
+                capex = cf.loc['Capital Expenditure'].dropna()[::-1]
+                fcf = op_cf + capex  # capex negativo
 
             rev_ltm = rev.iloc[-1]
             fcf_ltm = fcf.iloc[-1]
 
             ev = info.get("enterpriseValue")
             market_cap = info.get("marketCap")
-            pe = info.get("trailingPE")
 
             # --- CORE ---
             ev_fcf = safe_div(ev, fcf_ltm)
@@ -141,52 +140,32 @@ if ticker:
 
             fcf_yield = safe_div(fcf_ltm, market_cap)
 
-            # --- CAPEX ---
-            capex = abs(cf.loc['Capital Expenditure'].dropna().iloc[-1]) if 'Capital Expenditure' in cf.index else None
-            capex_ratio = safe_div(capex, rev_ltm)
-
-            # --- ROIC CORRECTO ---
-            op_income = inc.loc['Operating Income'].dropna().iloc[0] if 'Operating Income' in inc.index else None
+            # --- ROIC REAL ---
+            ebit = inc.loc['EBIT'].dropna().iloc[0] if 'EBIT' in inc.index else None
             tax_rate = 0.21
-            nopat = op_income * (1 - tax_rate) if op_income else None
+            nopat = ebit * (1 - tax_rate) if ebit else None
 
-            debt = info.get("totalDebt", 0)
-            cash = info.get("totalCash", 0)
-            equity = bs.loc['Total Stockholder Equity'].dropna().iloc[0] if 'Total Stockholder Equity' in bs.index else None
+            debt = bs.loc['Total Debt'].dropna().iloc[0] if 'Total Debt' in bs.index else 0
+            equity = bs.loc['Stockholders Equity'].dropna().iloc[0] if 'Stockholders Equity' in bs.index else None
 
-            invested_capital = (equity + debt - cash) if equity else None
+            invested_capital = debt + equity if equity else None
             roic = safe_div(nopat, invested_capital)
 
-            # --- PEG CORRECTO ---
-            peg = safe_div(pe, cagr * 100) if pe and cagr else None
+            # --- PEG REAL ---
+            pe = info.get("trailingPE")
+            peg = safe_div(pe, pct(cagr)) if cagr and pe else None
 
-            # --- REINVERSIÓN ---
-            operating_cf = cf.loc['Operating Cash Flow'].dropna().iloc[0] if 'Operating Cash Flow' in cf.index else None
-            reinvestment = safe_div(capex, operating_cf)
-
-            # --- MODELO FORWARD ---
+            # --- FORWARD ---
             st.subheader("⚙️ Modelo Forward")
-
-            tipo = st.selectbox("Tipo empresa", ["Físico", "Software", "Plataforma"])
+            tipo = st.selectbox("Tipo empresa", ["Plataforma", "Software", "Industrial"])
 
             backlog = st.number_input("Backlog (Billions USD)", value=0.0)
             conversion = st.slider("Conversión %", 0, 100, 50)
 
             backlog_usd = backlog * 1e9
+            backlog_fcf = backlog_usd * (conversion / 100) * (fcf_margin if fcf_margin else 0)
 
-            if tipo == "Físico":
-                backlog_fcf = backlog_usd * (conversion / 100) * (fcf_margin if fcf_margin else 0)
-                fcf_forward = fcf_ltm + backlog_fcf
-
-            elif tipo == "Software":
-                backlog_fcf = backlog_usd * (conversion / 100) * 0.8
-                fcf_forward = fcf_ltm + backlog_fcf
-
-            else:  # Plataforma
-                # NO usar backlog → usar mejora de eficiencia
-                improvement = 1 + (0.2 if reinvestment and reinvestment > 0.4 else 0.1)
-                fcf_forward = fcf_ltm * improvement
-
+            fcf_forward = fcf_ltm + backlog_fcf
             ev_fcf_forward = safe_div(ev, fcf_forward)
 
             # --- DATA ---
@@ -196,11 +175,10 @@ if ticker:
                 "ROIC": roic,
                 "PEG": peg,
                 "FCF_Yield": fcf_yield,
-                "CAGR": cagr,
-                "Reinvestment": reinvestment
+                "CAGR": cagr
             }
 
-            score = calcular_score(data, tipo)
+            score = calcular_score(data)
             sig = señal(score)
 
             # --- DISPLAY ---
@@ -217,9 +195,7 @@ if ticker:
             st.write("🧠 Calidad")
             st.json({
                 "ROIC %": pct(roic),
-                "CapEx %": pct(capex_ratio),
-                "FCF Yield %": pct(fcf_yield),
-                "Reinvestment %": pct(reinvestment)
+                "FCF Yield %": pct(fcf_yield)
             })
 
             st.write("📈 Forward")
@@ -234,7 +210,7 @@ if ticker:
             st.metric("Señal", sig)
 
             if st.button("Analizar IA"):
-                res = analizar_ia(data, tipo)
+                res = analizar_ia(data)
                 st.markdown(res)
 
     except Exception as e:
