@@ -22,12 +22,9 @@ FMP_API_KEY = st.sidebar.text_input("FMP API", type="password")
 client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 # --- UTILIDADES ---
-def safe(x):
-    return None if x in [None, "None", np.nan] else x
-
 def div(n, d):
     try:
-        if n is None or d in [0, None]:
+        if n is None or d is None or d == 0:
             return None
         return n / d
     except:
@@ -38,6 +35,16 @@ def pct(x):
         return None if x is None else round(x * 100, 2)
     except:
         return None
+
+# --- BUSCADOR FLEXIBLE (FIX CLAVE) ---
+def get_item(df, posibles_keys):
+    for key in posibles_keys:
+        if key in df.index:
+            try:
+                return df.loc[key].iloc[0]
+            except:
+                continue
+    return None
 
 # --- FMP ---
 def get_fmp(ticker):
@@ -94,6 +101,7 @@ if ticker:
         cf = tk.cashflow
         bs = tk.balance_sheet
 
+        # --- CORE ---
         rev = inc.loc['Total Revenue'].dropna()[::-1]
         fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
 
@@ -111,19 +119,33 @@ if ticker:
         fcf_yield = div(fcf_ltm, market_cap)
 
         gross_margin = inf.get("grossMargins")
+
         capex = abs(cf.loc['Capital Expenditure'].dropna()[::-1].iloc[-1])
         capex_ratio = div(capex, rev_ltm)
 
-        # --- BALANCE ---
-        debt = bs.loc['Total Debt'].iloc[0] if 'Total Debt' in bs.index else None
-        cash = bs.loc['Cash And Cash Equivalents'].iloc[0] if 'Cash And Cash Equivalents' in bs.index else None
-        net_debt = (debt - cash) if debt and cash else None
+        # --- BALANCE FIXEADO ---
+        debt = get_item(bs, ['Total Debt', 'Long Term Debt'])
+        cash = get_item(bs, ['Cash And Cash Equivalents', 'Cash'])
+        equity = get_item(bs, [
+            'Total Stockholder Equity',
+            'Total Stockholders Equity',
+            'Stockholders Equity',
+            'Total Equity'
+        ])
 
-        # --- ROIC ---
-        op_income = inc.loc['Operating Income'].iloc[0] if 'Operating Income' in inc.index else None
+        net_debt = (debt - cash) if (debt is not None and cash is not None) else None
+
+        # --- ROIC FIX ---
+        op_income = get_item(inc, ['Operating Income'])
+
         tax = 0.25
-        nopat = op_income * (1-tax) if op_income else None
-        capital = (debt + bs.loc['Total Stockholder Equity'].iloc[0] - cash) if debt and cash else None
+        nopat = op_income * (1-tax) if op_income is not None else None
+
+        if debt is not None and equity is not None and cash is not None:
+            capital = debt + equity - cash
+        else:
+            capital = None
+
         roic = div(nopat, capital)
 
         # --- SBC ---
@@ -143,9 +165,10 @@ if ticker:
 
         backlog_usd = backlog * 1e9
         backlog_fcf = backlog_usd * (conv/100) * (fcf_margin if fcf_margin else 0)
-        fcf_forward = fcf_ltm + backlog_fcf if fcf_ltm else None
 
+        fcf_forward = fcf_ltm + backlog_fcf if fcf_ltm else None
         ev_fcf_forward = div(ev, fcf_forward)
+
         peg = div(ev_fcf_forward, pct(cagr))
 
         # --- SCORE ---
@@ -158,7 +181,7 @@ if ticker:
 
         senal = "🟢 COMPRA" if score>=4 else "🟡 HOLD" if score>=2 else "🔴 RECHAZO"
 
-        # --- DATA FINAL ---
+        # --- OUTPUT ---
         data = {
             "EV/FCF": round(ev_fcf,2) if ev_fcf else None,
             "EV/FCF Forward": round(ev_fcf_forward,2) if ev_fcf_forward else None,
