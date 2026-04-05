@@ -2,11 +2,11 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-import requests
+import os
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V7", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V6.6", layout="wide")
 
 st.markdown("""
 <style>
@@ -14,22 +14,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- API KEYS ---
-st.sidebar.markdown("### 🔑 API KEYS")
-
-GEMINI_API_KEY = st.sidebar.text_input("Gemini API", type="password")
-FMP_API_KEY = st.sidebar.text_input("FMP API", type="password")
+# --- API ---
+st.sidebar.markdown("### 🔑 Configuración API")
+GEMINI_API_KEY = st.sidebar.text_input("Ingresa tu API Key", type="password")
 
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
 
-# --- UTILIDADES ---
-def safe(x):
-    if x is None or x == "N/D":
-        return None
-    return x
+EXCEL_FILE = "Analisis_HedgeFund_V6.xlsx"
 
+# --- UTILIDADES ---
 def division_segura(n, d):
     try:
         if n is None or d is None or d == 0:
@@ -38,48 +33,73 @@ def division_segura(n, d):
     except:
         return None
 
-def to_pct(x):
-    return None if x is None else round(x * 100, 2)
-
-# --- FMP FETCH ---
-def get_fmp_data(ticker):
+def to_pct(v):
     try:
-        url = f"https://financialmodelingprep.com/api/v3/key-metrics/{ticker}?limit=1&apikey={FMP_API_KEY}"
-        r = requests.get(url).json()[0]
-
-        return {
-            "roic": r.get("roic"),
-            "net_debt": r.get("netDebtToEBITDA"),
-            "pe": r.get("peRatio")
-        }
+        if v is None or np.isnan(v):
+            return None
+        return round(v * 100, 2)
     except:
-        return {}
+        return None
 
-# --- BACKLOG → FCF ---
+# --- ALERTAS ---
+def generar_alertas(data, mandato):
+    alertas = []
+
+    if data["EV_FCF"] and data["EV_FCF"] > mandato["Max_EV"]:
+        alertas.append("🔴 Sobrevaloración: EV/FCF elevado")
+
+    if data["FCF_Margin"] and data["FCF_Margin"] < 10:
+        alertas.append("🟠 Margen FCF débil")
+
+    if data["PEG"] and data["PEG"] > 2:
+        alertas.append("🔴 Growth no justifica valoración (PEG alto)")
+
+    return alertas
+
+# --- CLASIFICADOR ---
+def clasificar_empresa(data):
+    cagr = data["CAGR"]
+    price_cagr = data["CAGR_Precio_5Y"]
+    fcf_margin = data["FCF_Margin"]
+
+    if None in [cagr, price_cagr, fcf_margin]:
+        return "⚪ Datos insuficientes"
+
+    if cagr > 8 and fcf_margin > 15 and abs(price_cagr - cagr) < 5:
+        return "🟢 Compounder sano"
+
+    if cagr > 20 and price_cagr > cagr:
+        return "🔵 Hipercrecimiento"
+
+    if cagr > 5 and price_cagr < 0:
+        return "🟡 Turnaround"
+
+    if cagr < 5 and price_cagr < 0:
+        return "🔴 Value trap"
+
+    return "⚪ Neutral"
+
+# --- BACKLOG REALISTA ---
 def calcular_backlog_fcf(backlog_b, margen, tipo):
-    """
-    backlog_b: en BILLIONS
-    margen: %
-    """
     if backlog_b is None or margen is None:
         return None
 
     backlog_usd = backlog_b * 1e9
 
+    # 🔧 CORREGIDO (más realista)
     if tipo == "Software":
-        conversion = 0.85
+        conversion = 0.7
     else:
-        conversion = 0.6
+        conversion = 0.3
 
     return backlog_usd * conversion * (margen / 100)
 
-# --- FORWARD MODEL ---
+# --- FORWARD ---
 def modelo_forward(ev, fcf_actual, backlog_fcf):
     if fcf_actual is None:
         return {}
 
     fcf_forward = fcf_actual + (backlog_fcf or 0)
-
     ev_fcf_forward = division_segura(ev, fcf_forward)
 
     return {
@@ -87,28 +107,52 @@ def modelo_forward(ev, fcf_actual, backlog_fcf):
         "EV_FCF_Forward": ev_fcf_forward
     }
 
-# --- PEG REAL ---
+# --- PEG CORREGIDO ---
 def calcular_peg(ev_fcf_forward, cagr):
     if ev_fcf_forward is None or cagr is None or cagr == 0:
         return None
-    return ev_fcf_forward / cagr
+
+    return ev_fcf_forward / (cagr * 100)  # 🔥 FIX
+
+# --- SIZING ---
+def calcular_sizing(data, clasificacion, trampa):
+    base = 0
+
+    if clasificacion == "🟢 Compounder sano":
+        base = 0.25
+    elif clasificacion == "🔵 Hipercrecimiento":
+        base = 0.20
+    elif clasificacion == "🟡 Turnaround":
+        base = 0.15
+    elif clasificacion == "🔴 Value trap":
+        base = 0.05
+
+    if trampa:
+        base *= 0.5
+
+    if data["FCF_Margin"] and data["FCF_Margin"] > 30:
+        base += 0.05
+
+    return round(base * 100, 1)
 
 # --- IA ---
-def analizar_ia(data):
+def analizar_v6_ia(d, m, clasificacion, sizing):
     if not client:
         return "⚠️ IA desactivada"
 
     prompt = f"""
-    COMITÉ INSTITUCIONAL BUY-SIDE.
+    COMITÉ INSTITUCIONAL.
 
-    DATOS YA PROCESADOS:
-    {data}
+    DATOS:
+    {d}
 
-    TAREAS:
+    CLASIFICACIÓN: {clasificacion}
+    SIZING: {sizing}%
+
+    REGLAS:
     - Evaluar si el crecimiento justifica la valoración
-    - Detectar riesgo de múltiplos
-    - Validar backlog como fuente real de FCF
-    - Confirmar o rechazar tesis
+    - Validar PEG
+    - Evaluar calidad del backlog
 
     OUTPUT:
     IDENTIDAD:
@@ -117,8 +161,9 @@ def analizar_ia(data):
     ...
     RIESGO:
     ...
-    CONCLUSIÓN:
-    ...
+    FINAL:
+    Veredicto:
+    Sizing recomendado:
     """
 
     return client.models.generate_content(
@@ -127,7 +172,7 @@ def analizar_ia(data):
     ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V7")
+st.title("🔬 Alpha Boardroom V6.6")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -142,7 +187,6 @@ if ticker:
         if inc.empty or cf.empty:
             st.error("❌ Datos incompletos")
         else:
-            # --- FUNDAMENTALES ---
             rev = inc.loc['Total Revenue'].dropna()[::-1]
             fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
 
@@ -152,21 +196,16 @@ if ticker:
             rev_ltm = rev.iloc[-1]
 
             ev = inf.get("enterpriseValue")
-
             ev_fcf = division_segura(ev, fcf_ltm)
             fcf_margin = division_segura(fcf_ltm, rev_ltm)
 
-            # --- HISTÓRICO ---
             hist = tk.history(period="5y")
-            price_cagr = None
 
             if not hist.empty:
                 price_cagr = (hist["Close"].iloc[-1] / hist["Close"].iloc[0])**(1/5) - 1
+            else:
+                price_cagr = None
 
-            # --- FMP ---
-            fmp = get_fmp_data(ticker) if FMP_API_KEY else {}
-
-            # --- UI CORE ---
             st.subheader(inf.get("longName"))
 
             col1, col2, col3 = st.columns(3)
@@ -174,7 +213,11 @@ if ticker:
             col2.metric("CAGR %", to_pct(cagr))
             col3.metric("FCF Margin %", to_pct(fcf_margin))
 
-            # --- BACKLOG INPUT ---
+            # --- NUEVO INPUT PER ---
+            st.markdown("### 📊 Input Opcional Profesional")
+            per_manual = st.number_input("PER Ratio (opcional)", value=0.0)
+
+            # --- BACKLOG ---
             st.markdown("### ⚙️ Modelo Forward")
 
             colA, colB, colC = st.columns(3)
@@ -191,37 +234,50 @@ if ticker:
             if st.button("Analizar"):
 
                 backlog_fcf = calcular_backlog_fcf(backlog_b, margen, tipo)
-
                 forward = modelo_forward(ev, fcf_ltm, backlog_fcf)
-
                 peg = calcular_peg(forward.get("EV_FCF_Forward"), cagr)
 
                 data = {
+                    "Ticker": ticker,
                     "EV_FCF": ev_fcf,
                     "CAGR": to_pct(cagr),
                     "FCF_Margin": to_pct(fcf_margin),
-                    "CAGR_5Y_Price": to_pct(price_cagr),
-                    "ROIC": fmp.get("roic"),
-                    "NetDebt": fmp.get("net_debt"),
-                    "Backlog_FCF": backlog_fcf,
+                    "CAGR_Precio_5Y": to_pct(price_cagr),
                     "EV_FCF_Forward": forward.get("EV_FCF_Forward"),
-                    "PEG": peg
+                    "PEG": peg,
+                    "PER_Manual": per_manual if per_manual > 0 else None
                 }
 
-                st.markdown("### 📈 Modelo Forward")
+                clasificacion = clasificar_empresa(data)
+                sizing = calcular_sizing(data, clasificacion, False)
 
+                # ALERTAS
+                alertas = generar_alertas(data, m)
+                if alertas:
+                    for a in alertas:
+                        st.warning(a)
+                else:
+                    st.success("🟢 Sin alertas críticas")
+
+                st.markdown("### 🧭 Clasificación")
+                st.info(clasificacion)
+
+                st.markdown("### 💰 Sizing sugerido")
+                st.success(f"{sizing}% del portafolio")
+
+                st.markdown("### 📈 Modelo Forward")
                 st.json({
                     "FCF Forward": forward.get("FCF_Forward"),
                     "EV/FCF Forward": forward.get("EV_FCF_Forward"),
                     "PEG": peg
                 })
 
-                # --- IA ---
+                # IA
                 with st.spinner("IA..."):
                     try:
-                        res = analizar_ia(data)
-                    except Exception as e:
-                        res = f"⚠️ Error IA: {e}"
+                        res = analizar_v6_ia(data, m, clasificacion, sizing)
+                    except:
+                        res = "⚠️ IA no disponible"
 
                 st.markdown("### 🧠 Informe")
                 st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
