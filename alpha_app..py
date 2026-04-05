@@ -42,9 +42,10 @@ def get_fmp_data(ticker):
 def calcular_score(data):
     score = 0
 
-    if data["FCF_Margin"] and data["FCF_Margin"] > 15:
+    # CORRECCIÓN DE DECIMALES PARA FCF MARGIN Y ROIC
+    if data["FCF_Margin"] and data["FCF_Margin"] > 0.15:
         score += 2
-    if data["ROIC"] and data["ROIC"] > 20:
+    if data["ROIC"] and data["ROIC"] > 0.20:
         score += 2
     if data["EV_FCF"] and data["EV_FCF"] < 30:
         score += 2
