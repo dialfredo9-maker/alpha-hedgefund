@@ -6,7 +6,7 @@ import requests
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V7 Institucional", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V8 Institucional", layout="wide")
 
 # --- API KEYS ---
 st.sidebar.title("🔑 APIs")
@@ -27,7 +27,7 @@ def safe_div(a, b):
 def pct(x):
     return round(x * 100, 2) if x is not None else None
 
-# --- FMP FETCH ---
+# --- FMP ---
 def get_fmp_data(ticker):
     if not FMP_API_KEY:
         return {}
@@ -38,21 +38,63 @@ def get_fmp_data(ticker):
     except:
         return {}
 
-# --- SCORE ---
-def calcular_score(data):
+# --- CLASIFICACIÓN ---
+def clasificar_empresa(tipo):
+    return tipo
+
+# --- DETECTORES ---
+def detectar_reinversion(capex_ratio):
+    return capex_ratio is not None and capex_ratio > 0.08
+
+def normalizar_roic(roic):
+    if roic and roic > 0.5:
+        return None
+    return roic
+
+def calcular_peg(pe, growth):
+    if pe and growth and growth > 0:
+        return pe / (growth * 100)
+    return None
+
+# --- BACKLOG ---
+def calcular_backlog(tipo, backlog_usd, conversion, fcf_margin):
+    if tipo in ["Software", "Plataforma"]:
+        return backlog_usd * (conversion / 100)
+    else:
+        if fcf_margin:
+            return backlog_usd * (conversion / 100) * fcf_margin
+    return 0
+
+# --- SCORE INTELIGENTE ---
+def calcular_score(data, tipo, reinvierte):
     score = 0
 
-    # CORRECCIÓN DE DECIMALES PARA FCF MARGIN Y ROIC
-    if data["FCF_Margin"] and data["FCF_Margin"] > 0.15:
+    # Calidad
+    if data["FCF_Margin"] and data["FCF_Margin"] > 0.25:
         score += 2
-    if data["ROIC"] and data["ROIC"] > 0.20:
+    if data["ROIC"] and data["ROIC"] > 0.15:
         score += 2
+
+    # Valuación base
     if data["EV_FCF"] and data["EV_FCF"] < 30:
         score += 2
-    if data["PEG"] and data["PEG"] < 1.5:
-        score += 2
-    if data["FCF_Yield"] and data["FCF_Yield"] > 0.03:
-        score += 2
+
+    # PEG solo en software/plataforma
+    if tipo in ["Software", "Plataforma"]:
+        if data["PEG"] and data["PEG"] < 2:
+            score += 2
+
+    # FCF Yield contextual
+    if tipo in ["Cíclica", "Industrial"]:
+        if data["FCF_Yield"] and data["FCF_Yield"] > 0.05:
+            score += 2
+    else:
+        if data["FCF_Yield"] and data["FCF_Yield"] > 0.025:
+            score += 2
+
+    # Bonus reinversión
+    if reinvierte:
+        score += 1
 
     return score
 
@@ -65,23 +107,29 @@ def señal(score):
         return "🔴 SELL"
 
 # --- IA ---
-def analizar_ia(data):
+def analizar_ia(data, tipo):
     if not client:
         return "⚠️ IA desactivada"
 
     prompt = f"""
     Eres comité institucional.
 
+    Tipo empresa: {tipo}
+
     DATA:
     {data}
 
-    Evalúa:
-    - Calidad
-    - Valuación
-    - Riesgo
-    - Valida score
+    IMPORTANTE:
+    - Ajusta análisis según tipo de empresa
+    - No uses PEG si es cíclica/industrial
+    - Considera reinversión si CapEx alto
 
-    Output profesional.
+    Evalúa:
+    - Calidad real
+    - Valuación contextual
+    - Riesgos reales (no genéricos)
+    - Veredicto profesional
+
     """
 
     return client.models.generate_content(
@@ -90,7 +138,7 @@ def analizar_ia(data):
     ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V7 - Institucional")
+st.title("🔬 Alpha Boardroom V8 - Institucional")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -121,22 +169,17 @@ if ticker:
             ev_fcf = safe_div(ev, fcf_ltm)
             fcf_margin = safe_div(fcf_ltm, rev_ltm)
 
-            # CAGR
+            # CAGR ingresos
             cagr = None
             if len(rev) > 1:
                 cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1
 
-            # --- NUEVO ---
             fcf_yield = safe_div(fcf_ltm, market_cap)
 
             capex = abs(cf.loc['Capital Expenditure'].dropna().iloc[-1]) if 'Capital Expenditure' in cf.index else None
             capex_ratio = safe_div(capex, rev_ltm)
 
-            # SBC (FMP)
-            sbc = fmp.get("stockBasedCompensation", None)
-            sbc_ratio = safe_div(sbc, rev_ltm) if sbc else None
-
-            # ROIC fallback
+            # ROIC simplificado
             equity = None
             for key in ["Total Stockholder Equity", "Total Equity Gross Minority Interest"]:
                 if key in bs.index:
@@ -144,24 +187,31 @@ if ticker:
                     break
 
             roic = safe_div(fcf_ltm, equity) if equity else None
+            roic = normalizar_roic(roic)
 
-            # --- PEG CORRECTO ---
-            peg = safe_div(ev_fcf, cagr * 100) if cagr else None
+            # PEG real aproximado
+            pe = info.get("trailingPE")
+            peg = calcular_peg(pe, cagr)
 
-            # --- BACKLOG INPUT ---
+            # --- INPUT MODELO ---
             st.subheader("⚙️ Modelo Forward")
-            tipo = st.selectbox("Tipo empresa", ["Físico", "Software"])
+
+            tipo = st.selectbox("Tipo empresa", [
+                "Software", "Plataforma", "Industrial", "Defensa", "Cíclica"
+            ])
 
             backlog = st.number_input("Backlog (Billions USD)", value=0.0)
             conversion = st.slider("Conversión %", 0, 100, 50)
 
             backlog_usd = backlog * 1e9
-            backlog_fcf = backlog_usd * (conversion / 100) * (fcf_margin if fcf_margin else 0)
+            backlog_fcf = calcular_backlog(tipo, backlog_usd, conversion, fcf_margin)
 
             fcf_forward = fcf_ltm + backlog_fcf
             ev_fcf_forward = safe_div(ev, fcf_forward)
 
-            # --- SCORE ---
+            reinvierte = detectar_reinversion(capex_ratio)
+
+            # --- DATA ---
             data = {
                 "EV_FCF": ev_fcf,
                 "FCF_Margin": fcf_margin,
@@ -170,7 +220,8 @@ if ticker:
                 "FCF_Yield": fcf_yield
             }
 
-            score = calcular_score(data)
+            # --- SCORE ---
+            score = calcular_score(data, tipo, reinvierte)
             sig = señal(score)
 
             # --- DISPLAY ---
@@ -181,15 +232,15 @@ if ticker:
                 "EV/FCF": round(ev_fcf,2) if ev_fcf else None,
                 "CAGR %": pct(cagr),
                 "FCF Margin %": pct(fcf_margin),
-                "PE": info.get("trailingPE")
+                "PE": pe
             })
 
             st.write("🧠 Calidad")
             st.json({
                 "ROIC %": pct(roic),
-                "SBC %": pct(sbc_ratio),
                 "CapEx %": pct(capex_ratio),
-                "FCF Yield %": pct(fcf_yield)
+                "FCF Yield %": pct(fcf_yield),
+                "Reinvierte": reinvierte
             })
 
             st.write("📈 Forward")
@@ -203,9 +254,8 @@ if ticker:
             st.metric("Score", f"{score}/10")
             st.metric("Señal", sig)
 
-            # --- IA ---
             if st.button("Analizar IA"):
-                res = analizar_ia(data)
+                res = analizar_ia(data, tipo)
                 st.markdown(res)
 
     except Exception as e:
