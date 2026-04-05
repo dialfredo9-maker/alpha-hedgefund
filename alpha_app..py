@@ -20,12 +20,19 @@ def safe_div(a, b):
     try:
         if a is None or b in [0, None]:
             return None
-        return a / b
+        return float(a) / float(b)
     except:
         return None
 
 def pct(x):
     return round(x * 100, 2) if x is not None else None
+
+def clean_series(df, key):
+    if key in df.index:
+        s = df.loc[key].dropna()
+        if len(s) > 0:
+            return s[::-1]  # orden cronológico
+    return None
 
 # --- FMP ---
 def get_fmp_data(ticker):
@@ -113,105 +120,121 @@ if ticker:
         if inc.empty or cf.empty:
             st.error("❌ Datos insuficientes")
         else:
-            rev = inc.loc['Total Revenue'].dropna()[::-1]
 
-            # --- FCF robusto ---
-            if 'Free Cash Flow' in cf.index:
-                fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
+            # --- DATA LIMPIA ---
+            rev = clean_series(inc, 'Total Revenue')
+            op_cf = clean_series(cf, 'Operating Cash Flow')
+            capex = clean_series(cf, 'Capital Expenditure')
+            fcf_direct = clean_series(cf, 'Free Cash Flow')
+
+            if rev is None or (fcf_direct is None and (op_cf is None or capex is None)):
+                st.error("❌ Datos incompletos")
             else:
-                op_cf = cf.loc['Operating Cash Flow'].dropna()[::-1]
-                capex = cf.loc['Capital Expenditure'].dropna()[::-1]
-                fcf = op_cf + capex  # capex negativo
 
-            rev_ltm = rev.iloc[-1]
-            fcf_ltm = fcf.iloc[-1]
+                # --- FCF REAL ---
+                if fcf_direct is not None:
+                    fcf = fcf_direct
+                else:
+                    fcf = op_cf + capex  # capex negativo correcto
 
-            ev = info.get("enterpriseValue")
-            market_cap = info.get("marketCap")
+                rev_ltm = rev.iloc[-1]
+                fcf_ltm = fcf.iloc[-1]
 
-            # --- CORE ---
-            ev_fcf = safe_div(ev, fcf_ltm)
-            fcf_margin = safe_div(fcf_ltm, rev_ltm)
+                ev = info.get("enterpriseValue")
+                market_cap = info.get("marketCap")
+                pe = info.get("trailingPE")
 
-            # CAGR
-            cagr = None
-            if len(rev) > 1:
-                cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1
+                # --- CORE ---
+                ev_fcf = safe_div(ev, fcf_ltm)
+                fcf_margin = safe_div(fcf_ltm, rev_ltm)
 
-            fcf_yield = safe_div(fcf_ltm, market_cap)
+                # CAGR REAL
+                cagr = None
+                if len(rev) > 1 and rev.iloc[0] > 0:
+                    cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1
 
-            # --- ROIC REAL ---
-            ebit = inc.loc['EBIT'].dropna().iloc[0] if 'EBIT' in inc.index else None
-            tax_rate = 0.21
-            nopat = ebit * (1 - tax_rate) if ebit else None
+                fcf_yield = safe_div(fcf_ltm, market_cap)
 
-            debt = bs.loc['Total Debt'].dropna().iloc[0] if 'Total Debt' in bs.index else 0
-            equity = bs.loc['Stockholders Equity'].dropna().iloc[0] if 'Stockholders Equity' in bs.index else None
+                # --- ROIC CORRECTO (MISMO PERIODO) ---
+                ebit_series = clean_series(inc, 'EBIT')
 
-            invested_capital = debt + equity if equity else None
-            roic = safe_div(nopat, invested_capital)
+                if ebit_series is not None:
+                    ebit = ebit_series.iloc[-1]
+                else:
+                    ebit = None
 
-            # --- PEG REAL ---
-            pe = info.get("trailingPE")
-            peg = safe_div(pe, pct(cagr)) if cagr and pe else None
+                tax_rate = 0.21
+                nopat = ebit * (1 - tax_rate) if ebit else None
 
-            # --- FORWARD ---
-            st.subheader("⚙️ Modelo Forward")
-            tipo = st.selectbox("Tipo empresa", ["Plataforma", "Software", "Industrial"])
+                debt_series = clean_series(bs, 'Total Debt')
+                equity_series = clean_series(bs, 'Stockholders Equity')
 
-            backlog = st.number_input("Backlog (Billions USD)", value=0.0)
-            conversion = st.slider("Conversión %", 0, 100, 50)
+                debt = debt_series.iloc[-1] if debt_series is not None else 0
+                equity = equity_series.iloc[-1] if equity_series is not None else None
 
-            backlog_usd = backlog * 1e9
-            backlog_fcf = backlog_usd * (conversion / 100) * (fcf_margin if fcf_margin else 0)
+                invested_capital = debt + equity if equity else None
+                roic = safe_div(nopat, invested_capital)
 
-            fcf_forward = fcf_ltm + backlog_fcf
-            ev_fcf_forward = safe_div(ev, fcf_forward)
+                # --- PEG FIX REAL (ERROR CLAVE ARREGLADO) ---
+                peg = safe_div(pe, cagr) if cagr and pe else None
 
-            # --- DATA ---
-            data = {
-                "EV_FCF": ev_fcf,
-                "FCF_Margin": fcf_margin,
-                "ROIC": roic,
-                "PEG": peg,
-                "FCF_Yield": fcf_yield,
-                "CAGR": cagr
-            }
+                # --- FORWARD ---
+                st.subheader("⚙️ Modelo Forward")
+                tipo = st.selectbox("Tipo empresa", ["Plataforma", "Software", "Industrial"])
 
-            score = calcular_score(data)
-            sig = señal(score)
+                backlog = st.number_input("Backlog (Billions USD)", value=0.0)
+                conversion = st.slider("Conversión %", 0, 100, 50)
 
-            # --- DISPLAY ---
-            st.subheader(info.get("longName"))
+                backlog_usd = backlog * 1e9
+                backlog_fcf = backlog_usd * (conversion / 100) * (fcf_margin if fcf_margin else 0)
 
-            st.write("📊 Core")
-            st.json({
-                "EV/FCF": round(ev_fcf,2) if ev_fcf else None,
-                "CAGR %": pct(cagr),
-                "FCF Margin %": pct(fcf_margin),
-                "PE": pe
-            })
+                fcf_forward = fcf_ltm + backlog_fcf
+                ev_fcf_forward = safe_div(ev, fcf_forward)
 
-            st.write("🧠 Calidad")
-            st.json({
-                "ROIC %": pct(roic),
-                "FCF Yield %": pct(fcf_yield)
-            })
+                # --- DATA FINAL ---
+                data = {
+                    "EV_FCF": ev_fcf,
+                    "FCF_Margin": fcf_margin,
+                    "ROIC": roic,
+                    "PEG": peg,
+                    "FCF_Yield": fcf_yield,
+                    "CAGR": cagr
+                }
 
-            st.write("📈 Forward")
-            st.json({
-                "FCF Forward": int(fcf_forward),
-                "EV/FCF Forward": round(ev_fcf_forward,2) if ev_fcf_forward else None,
-                "PEG": round(peg,2) if peg else None
-            })
+                score = calcular_score(data)
+                sig = señal(score)
 
-            st.write("🎯 Score")
-            st.metric("Score", f"{score}/10")
-            st.metric("Señal", sig)
+                # --- DISPLAY ---
+                st.subheader(info.get("longName"))
 
-            if st.button("Analizar IA"):
-                res = analizar_ia(data)
-                st.markdown(res)
+                st.write("📊 Core")
+                st.json({
+                    "EV/FCF": round(ev_fcf,2) if ev_fcf else None,
+                    "CAGR %": pct(cagr),
+                    "FCF Margin %": pct(fcf_margin),
+                    "PE": pe
+                })
+
+                st.write("🧠 Calidad")
+                st.json({
+                    "ROIC %": pct(roic),
+                    "FCF Yield %": pct(fcf_yield)
+                })
+
+                st.write("📈 Forward")
+                st.json({
+                    "FCF Forward": int(fcf_forward),
+                    "EV/FCF Forward": round(ev_fcf_forward,2) if ev_fcf_forward else None,
+                    "PEG": round(peg,2) if peg else None
+                })
+
+                st.write("🎯 Score")
+                st.metric("Score", f"{score}/10")
+                st.metric("Señal", sig)
+
+                if st.button("Analizar IA"):
+                    res = analizar_ia(data)
+                    st.markdown(res)
 
     except Exception as e:
         st.error(f"Error: {e}")
