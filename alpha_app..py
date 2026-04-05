@@ -2,11 +2,12 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import numpy as np
-from google import genai
+import os
 import requests
+from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V6.7", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V7", layout="wide")
 
 st.markdown("""
 <style>
@@ -14,18 +15,15 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- API CONFIG ---
-st.sidebar.markdown("### 🔑 Configuración APIs")
+# --- API KEYS ---
+st.sidebar.markdown("### 🔑 APIs")
 
-GEMINI_API_KEY = st.sidebar.text_input("Gemini API Key", type="password")
-FMP_API_KEY = st.sidebar.text_input("FMP API Key", type="password")
+GEMINI_API_KEY = st.sidebar.text_input("Gemini API", type="password")
+FMP_API_KEY = st.sidebar.text_input("FMP API", type="password")
 
 client = None
 if GEMINI_API_KEY:
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-    except:
-        st.error("❌ Error con Gemini API")
+    client = genai.Client(api_key=GEMINI_API_KEY)
 
 # --- UTILIDADES ---
 def division_segura(n, d):
@@ -44,82 +42,119 @@ def to_pct(v):
     except:
         return None
 
-# --- FMP FETCH ---
-def get_fmp_data(ticker):
+# --- FMP FALLBACK ---
+def obtener_fmp(ticker):
     if not FMP_API_KEY:
         return {}
-
     try:
         url = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={FMP_API_KEY}"
         data = requests.get(url).json()
-
-        if data:
-            return {
-                "pe": data[0].get("pe"),
-                "marketCap": data[0].get("mktCap")
-            }
+        return data[0] if data else {}
     except:
         return {}
-
-    return {}
-
-# --- ALERTAS ---
-def generar_alertas(data, m):
-    alertas = []
-
-    if data["EV_FCF"] and data["EV_FCF"] > m["Max_EV"]:
-        alertas.append("🔴 EV/FCF alto")
-
-    if data["FCF_Margin"] and data["FCF_Margin"] < 10:
-        alertas.append("🟠 Margen bajo")
-
-    return alertas
 
 # --- CLASIFICADOR ---
 def clasificar(data):
     cagr = data["CAGR"]
+    price_cagr = data["CAGR_Precio_5Y"]
     fcf = data["FCF_Margin"]
-    price = data["CAGR_Precio_5Y"]
 
-    if None in [cagr, fcf, price]:
-        return "⚪ Datos insuficientes"
+    if None in [cagr, price_cagr, fcf]:
+        return "⚪ Neutral"
 
-    if cagr > 8 and fcf > 15:
+    if cagr > 15 and fcf > 15:
         return "🟢 Compounder"
 
-    if cagr > 20:
+    if cagr > 25:
         return "🔵 Hipercrecimiento"
 
-    if price < 0:
+    if cagr > 5 and price_cagr < 0:
         return "🟡 Turnaround"
 
-    return "⚪ Neutral"
+    return "🔴 Débil"
 
 # --- TRAMPA ---
 def detectar_trampa(data):
-    if data["EV_FCF"] and data["CAGR"]:
-        if data["EV_FCF"] > 40 and data["CAGR"] < 15:
+    if data["EV_FCF"] and data["CAGR"] and data["CAGR_Precio_5Y"]:
+        if data["EV_FCF"] < 15 and data["CAGR"] < 10 and data["CAGR_Precio_5Y"] < 0:
             return True
     return False
 
 # --- SIZING ---
-def sizing(data, clasificacion, trampa):
-    base = 5
-
-    if clasificacion == "🟢 Compounder":
-        base = 20
-    elif clasificacion == "🔵 Hipercrecimiento":
-        base = 15
-    elif clasificacion == "🟡 Turnaround":
-        base = 10
-
+def sizing(clasificacion, trampa):
+    base = 0.1
+    if "Compounder" in clasificacion:
+        base = 0.2
+    if "Hiper" in clasificacion:
+        base = 0.15
     if trampa:
         base *= 0.5
+    return round(base * 100,1)
 
-    return round(base, 1)
+# --- SCORE ---
+def calcular_score(data, mandato):
+    score = 0
+
+    if data["EV_FCF"] and data["EV_FCF"] < mandato["Max_EV"]:
+        score += 2
+
+    if data["CAGR"] and data["CAGR"] > 10:
+        score += 2
+
+    if data["FCF_Margin"] and data["FCF_Margin"] > 15:
+        score += 2
+
+    if data["PEG"] and data["PEG"] < 2:
+        score += 2
+
+    return score
+
+# --- SEÑAL ---
+def generar_senal(score, trampa):
+    if trampa:
+        return "🚫 RECHAZO"
+    if score >= 6:
+        return "🟢 COMPRA"
+    if score >= 4:
+        return "🟡 HOLD"
+    return "🔴 RECHAZO"
+
+# --- IA ---
+def analizar_ia(data, m, clasificacion, sizing, score, senal):
+    if not client:
+        return "⚠️ IA desactivada"
+
+    prompt = f"""
+    COMITÉ INSTITUCIONAL BUY-SIDE
+
+    MANDATO: {m}
+
+    DATA: {data}
+
+    CLASIFICACIÓN: {clasificacion}
+    SIZING: {sizing}%
+    SCORE: {score}
+    SEÑAL: {senal}
+
+    VALIDAR:
+    - valoración vs crecimiento
+    - si es trampa de múltiplos
+    - si el sizing es correcto
+
+    OUTPUT:
+    IDENTIDAD
+    VALUACIÓN
+    RIESGO
+    FINAL
+    """
+
+    return client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt
+    ).text
 
 # --- MANDATO ---
-if "mandato" not in st.session_state:
+if 'mandato' not in st.session_state:
     st.session_state.mandato = {
         "Nombre": "Moderado",
         "Max_EV": 45
@@ -127,116 +162,98 @@ if "mandato" not in st.session_state:
 
 m = st.session_state.mandato
 
-# --- IA ---
-def analizar_ia(data, m, clasificacion, size, trampa):
-    if not client:
-        return "⚠️ IA desactivada"
-
-    prompt = f"""
-    COMITÉ INSTITUCIONAL.
-
-    MANDATO: {m}
-    DATOS: {data}
-
-    CLASIFICACIÓN: {clasificacion}
-    SIZING: {size}%
-    TRAMPA: {trampa}
-
-    Evalúa rigurosamente.
-
-    OUTPUT:
-    IDENTIDAD:
-    ...
-    VALUACIÓN:
-    ...
-    RIESGO:
-    ...
-    FINAL:
-    """
-
-    try:
-        return client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        ).text
-    except Exception as e:
-        return f"Error IA: {e}"
-
 # --- UI ---
-st.title("🔬 Alpha Boardroom V6.7")
+st.title("🔬 Alpha Boardroom V7")
 
 ticker = st.text_input("Ticker").upper()
 
 if ticker:
+
     tk = yf.Ticker(ticker)
+    fmp = obtener_fmp(ticker)
 
     try:
         inf = tk.info
         inc = tk.financials
         cf = tk.cashflow
 
-        if inc.empty or cf.empty:
-            st.error("❌ Datos incompletos")
-        else:
-            rev = inc.loc['Total Revenue'].dropna()[::-1]
-            fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
+        rev = inc.loc['Total Revenue'].dropna()[::-1]
+        fcf = cf.loc['Free Cash Flow'].dropna()[::-1]
 
-            cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1 if len(rev) > 1 else None
+        cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1 if len(rev) > 1 else None
 
-            fcf_ltm = fcf.iloc[-1]
-            rev_ltm = rev.iloc[-1]
+        fcf_ltm = fcf.iloc[-1]
+        rev_ltm = rev.iloc[-1]
 
-            ev = inf.get("enterpriseValue")
-            ev_fcf = division_segura(ev, fcf_ltm)
-            fcf_margin = division_segura(fcf_ltm, rev_ltm)
+        ev = inf.get("enterpriseValue")
+        ev_fcf = division_segura(ev, fcf_ltm)
+        fcf_margin = division_segura(fcf_ltm, rev_ltm)
 
-            hist = tk.history(period="5y")
+        hist = tk.history(period="5y")
+        price_cagr = None
+        if not hist.empty:
+            price_cagr = (hist["Close"].iloc[-1] / hist["Close"].iloc[0])**(1/5) - 1
 
-            if not hist.empty:
-                price_cagr = (hist["Close"].iloc[-1] / hist["Close"].iloc[0])**(1/5) - 1
-            else:
-                price_cagr = None
+        # --- INPUT BACKLOG ---
+        st.markdown("### ⚙️ Modelo Forward")
 
-            # --- FMP ---
-            fmp = get_fmp_data(ticker)
+        tipo = st.selectbox("Tipo empresa", ["Físico","Software"])
+        backlog = st.number_input("Backlog (Billions USD)", value=0.0)
+        conv = st.slider("Conversión backlog %", 0,100,50)
 
-            st.subheader(inf.get("longName"))
+        backlog_usd = backlog * 1_000_000_000
+        backlog_fcf = backlog_usd * (conv/100) * (fcf_margin if fcf_margin else 0)
 
-            st.markdown("### 📊 Core")
-            st.json({
-                "EV/FCF": ev_fcf,
-                "CAGR %": to_pct(cagr),
-                "FCF Margin %": to_pct(fcf_margin),
-                "PE": fmp.get("pe")
-            })
+        fcf_forward = fcf_ltm + backlog_fcf if fcf_ltm else None
+        ev_fcf_forward = division_segura(ev, fcf_forward)
 
-            if st.button("Analizar"):
+        # --- PEG REAL ---
+        peg = division_segura(ev_fcf, (to_pct(cagr) or 1))
 
-                data = {
-                    "EV_FCF": ev_fcf,
-                    "CAGR": to_pct(cagr),
-                    "FCF_Margin": to_pct(fcf_margin),
-                    "CAGR_Precio_5Y": to_pct(price_cagr),
-                    "PE": fmp.get("pe")
-                }
+        data = {
+            "EV_FCF": ev_fcf,
+            "CAGR": to_pct(cagr),
+            "FCF_Margin": to_pct(fcf_margin),
+            "CAGR_Precio_5Y": to_pct(price_cagr),
+            "PEG": peg,
+            "EV_FCF_Forward": ev_fcf_forward
+        }
 
-                clas = clasificar(data)
-                trampa = detectar_trampa(data)
-                size = sizing(data, clas, trampa)
+        clasificacion = clasificar(data)
+        trampa = detectar_trampa(data)
+        siz = sizing(clasificacion, trampa)
+        score = calcular_score(data, m)
+        senal = generar_senal(score, trampa)
 
-                st.markdown("### 🧭 Clasificación")
-                st.info(clas)
+        # --- UI OUTPUT ---
+        st.subheader(inf.get("longName"))
 
-                if trampa:
-                    st.error("🚨 Posible trampa")
+        st.markdown("### 📊 Core")
+        st.json(data)
 
-                st.markdown("### 💰 Sizing")
-                st.success(f"{size}%")
+        st.markdown("### 🧭 Clasificación")
+        st.info(clasificacion)
 
-                res = analizar_ia(data, m, clas, size, trampa)
+        if trampa:
+            st.error("🚨 Posible trampa")
 
-                st.markdown("### 🧠 Informe")
-                st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
+        st.markdown("### 💰 Sizing")
+        st.success(f"{siz}%")
+
+        st.markdown("### 🧠 Score")
+        st.metric("Score Total", score)
+
+        st.markdown("### 🎯 Señal")
+        st.success(senal)
+
+        with st.spinner("IA..."):
+            try:
+                res = analizar_ia(data, m, clasificacion, siz, score, senal)
+            except Exception as e:
+                res = f"⚠️ IA error: {e}"
+
+        st.markdown("### 🧠 Informe")
+        st.markdown(f"<div class='report-box'>{res}</div>", unsafe_allow_html=True)
 
     except Exception as e:
         st.error(f"Error: {e}")
