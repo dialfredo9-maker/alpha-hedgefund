@@ -61,6 +61,37 @@ def generar_alertas(data, mandato):
 
     return alertas
 
+# --- 🔥 NUEVO: CLASIFICADOR V6 ---
+def clasificar_empresa(data):
+    try:
+        cagr = data["CAGR"]
+        price_cagr = data["CAGR_Precio_5Y"]
+        fcf_margin = data["FCF_Margin"]
+
+        if cagr is None or price_cagr is None or fcf_margin is None:
+            return "⚪ Datos insuficientes"
+
+        # 🟢 COMPOUNDER
+        if cagr > 8 and fcf_margin > 15 and abs(price_cagr - cagr) < 5:
+            return "🟢 Compounder sano"
+
+        # 🔵 HIPERCRECIMIENTO
+        if cagr > 20 and price_cagr > cagr:
+            return "🔵 Hipercrecimiento"
+
+        # 🟡 TURNAROUND
+        if cagr > 5 and price_cagr < 0:
+            return "🟡 Turnaround"
+
+        # 🔴 VALUE TRAP
+        if cagr < 5 and price_cagr < 0:
+            return "🔴 Value trap"
+
+        return "⚪ Neutral"
+
+    except:
+        return "⚪ Error clasificación"
+
 # --- MANDATO ---
 if 'mandato' not in st.session_state:
     st.session_state.mandato = {
@@ -96,7 +127,7 @@ with st.sidebar:
 m = st.session_state.mandato
 
 # --- IA ---
-def analizar_v5_ia(d, m):
+def analizar_v5_ia(d, m, clasificacion):
     if not client:
         return "⚠️ IA desactivada (sin API KEY). Usa snapshot + alertas."
 
@@ -109,11 +140,15 @@ def analizar_v5_ia(d, m):
     DATOS:
     {d}
 
+    CLASIFICACIÓN PRELIMINAR:
+    {clasificacion}
+
     REGLAS:
     - No ignores datos
     - Usa CAGR vs EV/FCF
     - Usa histórico 5 años
     - Detecta expansión de múltiplos
+    - CONFIRMA o REFUTA la clasificación preliminar
 
     OUTPUT:
 
@@ -228,6 +263,12 @@ if ticker:
                     "Contexto": ctx
                 }
 
+                # --- 🔥 CLASIFICACIÓN ---
+                clasificacion = clasificar_empresa(data)
+
+                st.markdown("### 🧭 Clasificación del Activo")
+                st.info(clasificacion)
+
                 # --- ALERTAS ---
                 alertas = generar_alertas(data, m)
 
@@ -244,7 +285,7 @@ if ticker:
                         if data == st.session_state.ultimo_input:
                             res = st.session_state.ultimo_resultado
                         else:
-                            res = analizar_v5_ia(data, m)
+                            res = analizar_v5_ia(data, m, clasificacion)
                             st.session_state.ultimo_input = data
                             st.session_state.ultimo_resultado = res
 
@@ -265,7 +306,7 @@ if ticker:
 
                 # --- GUARDAR ---
                 try:
-                    df = pd.DataFrame([{**data, "IA": res}])
+                    df = pd.DataFrame([{**data, "Clasificacion": clasificacion, "IA": res}])
 
                     if os.path.exists(EXCEL_FILE):
                         try:
