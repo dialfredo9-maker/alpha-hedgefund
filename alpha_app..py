@@ -6,7 +6,7 @@ import os
 from google import genai
 
 # --- CONFIG ---
-st.set_page_config(page_title="Alpha Boardroom V6.5", layout="wide")
+st.set_page_config(page_title="Alpha Boardroom V6.5 FIX", layout="wide")
 
 st.markdown("""
 <style>
@@ -21,8 +21,6 @@ GEMINI_API_KEY = st.sidebar.text_input("Ingresa tu API Key", type="password")
 client = None
 if GEMINI_API_KEY:
     client = genai.Client(api_key=GEMINI_API_KEY)
-
-EXCEL_FILE = "Analisis_HedgeFund_V6.xlsx"
 
 # --- UTILIDADES ---
 def division_segura(n, d):
@@ -48,7 +46,7 @@ def generar_alertas(data, mandato):
     if data["EV_FCF"] and data["EV_FCF"] > mandato["Max_EV"]:
         alertas.append("🔴 Sobrevaloración: EV/FCF elevado")
 
-    if data["FCF_Margin"] and data["FCF_Margin"] < 10:
+    if data["FCF_Margin"] and data["FCF_Margin"] < 0.10:
         alertas.append("🟠 Margen FCF débil")
 
     if data["CAGR_Precio_5Y"] and data["CAGR"]:
@@ -57,7 +55,7 @@ def generar_alertas(data, mandato):
 
     return alertas
 
-# --- 🧠 CLASIFICADOR ---
+# --- CLASIFICADOR CORREGIDO ---
 def clasificar_empresa(data):
     cagr = data["CAGR"]
     price_cagr = data["CAGR_Precio_5Y"]
@@ -66,28 +64,29 @@ def clasificar_empresa(data):
     if cagr is None or price_cagr is None or fcf_margin is None:
         return "⚪ Datos insuficientes"
 
-    if cagr > 8 and fcf_margin > 15 and abs(price_cagr - cagr) < 5:
-        return "🟢 Compounder sano"
-
-    if cagr > 20 and price_cagr > cagr:
+    # 🔵 HIPERCRECIMIENTO REAL (FIX NVIDIA)
+    if cagr > 0.4 and fcf_margin > 0.25:
         return "🔵 Hipercrecimiento"
 
-    if cagr > 5 and price_cagr < 0:
+    if cagr > 0.08 and fcf_margin > 0.15 and abs(price_cagr - cagr) < 0.05:
+        return "🟢 Compounder sano"
+
+    if cagr > 0.05 and price_cagr < 0:
         return "🟡 Turnaround"
 
-    if cagr < 5 and price_cagr < 0:
+    if cagr < 0.05 and price_cagr < 0:
         return "🔴 Value trap"
 
     return "⚪ Neutral"
 
-# --- 🚨 ANTI TRAMPA ALCISTA ---
+# --- TRAMPA ALCISTA CORREGIDA ---
 def detectar_trampa(data):
     if data["EV_FCF"] and data["CAGR"] and data["CAGR_Precio_5Y"]:
-        if data["EV_FCF"] < 12 and data["CAGR"] < 15 and data["CAGR_Precio_5Y"] < 0:
+        if data["EV_FCF"] < 12 and data["CAGR"] < 0.15 and data["CAGR_Precio_5Y"] < 0:
             return True
     return False
 
-# --- 💰 SIZING ---
+# --- SIZING CORREGIDO ---
 def calcular_sizing(data, clasificacion, trampa):
     base = 0
 
@@ -100,11 +99,10 @@ def calcular_sizing(data, clasificacion, trampa):
     elif clasificacion == "🔴 Value trap":
         base = 0.05
 
-    # Ajustes
     if trampa:
         base *= 0.5
 
-    if data["FCF_Margin"] and data["FCF_Margin"] > 30:
+    if data["FCF_Margin"] and data["FCF_Margin"] > 0.30:
         base += 0.05
 
     return round(base * 100, 1)
@@ -116,12 +114,6 @@ if 'mandato' not in st.session_state:
         "Max_EV": 45,
         "Peso_CAGR": 1.2
     }
-
-# --- CACHE ---
-if "ultimo_input" not in st.session_state:
-    st.session_state.ultimo_input = None
-if "ultimo_resultado" not in st.session_state:
-    st.session_state.ultimo_resultado = None
 
 with st.sidebar:
     st.title("📜 Mandato")
@@ -152,7 +144,6 @@ def analizar_v6_ia(d, m, clasificacion, sizing, trampa):
     COMITÉ INSTITUCIONAL.
 
     MANDATO: {m}
-
     DATOS: {d}
 
     CLASIFICACIÓN: {clasificacion}
@@ -160,9 +151,9 @@ def analizar_v6_ia(d, m, clasificacion, sizing, trampa):
     POSIBLE TRAMPA: {trampa}
 
     REGLAS:
-    - CONFIRMA o REFUTA la clasificación
-    - EVALÚA si es value trap
-    - VALIDA el sizing (puedes ajustarlo)
+    - CONFIRMA o REFUTA clasificación
+    - DETECTA sobrevaloración o trampa
+    - VALIDA sizing
 
     OUTPUT:
     IDENTIDAD:
@@ -180,12 +171,12 @@ def analizar_v6_ia(d, m, clasificacion, sizing, trampa):
     """
 
     return client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         contents=prompt
     ).text
 
 # --- UI ---
-st.title("🔬 Alpha Boardroom V6.5")
+st.title("🔬 Alpha Boardroom V6.5 FIX")
 
 ticker = st.text_input("Ticker").upper()
 
@@ -233,9 +224,9 @@ if ticker:
                 data = {
                     "Ticker": ticker,
                     "EV_FCF": ev_fcf,
-                    "CAGR": to_pct(cagr),
-                    "FCF_Margin": to_pct(fcf_margin),
-                    "CAGR_Precio_5Y": to_pct(price_cagr)
+                    "CAGR": cagr,
+                    "FCF_Margin": fcf_margin,
+                    "CAGR_Precio_5Y": price_cagr
                 }
 
                 clasificacion = clasificar_empresa(data)
@@ -246,7 +237,7 @@ if ticker:
                 st.info(clasificacion)
 
                 if trampa:
-                    st.error("🚨 POSIBLE VALUE TRAP / TRAMPA DE MÚLTIPLOS")
+                    st.error("🚨 POSIBLE VALUE TRAP / TRAMPA")
 
                 st.markdown("### 💰 Sizing sugerido")
                 st.success(f"{sizing}% del portafolio")
@@ -254,7 +245,8 @@ if ticker:
                 with st.spinner("IA..."):
                     try:
                         res = analizar_v6_ia(data, m, clasificacion, sizing, trampa)
-                    except:
+                    except Exception as e:
+                        st.error(f"Error IA real: {e}")
                         res = "⚠️ IA no disponible"
 
                 st.markdown("### 🧠 Informe")
