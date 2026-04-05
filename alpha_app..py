@@ -145,7 +145,7 @@ if ticker:
             roic = safe_div(fcf_ltm, equity) if equity else None
 
             # --- PEG CORRECTO ---
-            peg = safe_div(ev_fcf, cagr) if cagr else None
+            peg = safe_div(ev_fcf, cagr * 100) if cagr else None
 
             # --- BACKLOG INPUT ---
             st.subheader("⚙️ Modelo Forward")
