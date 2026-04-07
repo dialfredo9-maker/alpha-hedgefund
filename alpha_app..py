@@ -55,13 +55,13 @@ def fetch_sectorial_taxonomy(ticker: str) -> dict:
 @st.cache_data(ttl=3600)
 def fetch_quantitative_metrics(ticker: str) -> dict:
     """
-    Extrae ratios y vectores de crecimiento corporativo desde FMP.
-    Actualizado para compatibilidad total con Plan Starter 2026 (Endpoints Anuales).
+    Motor de Extracción compatible con FMP Plan Starter 2026.
+    Utiliza la nueva arquitectura '/stable/' y endpoints anuales.
     """
-    # Endpoints Anuales (El plan Starter incluye acceso a "Annual Fundamentals and Ratios")
-    url_metrics = f"https://financialmodelingprep.com/api/v3/key-metrics/{ticker}?limit=1&apikey={FMP_API_KEY}"
-    url_ratios = f"https://financialmodelingprep.com/api/v3/ratios/{ticker}?limit=1&apikey={FMP_API_KEY}"
-    url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=4&apikey={FMP_API_KEY}"
+    # Rutas Oficiales /stable/ para cuentas nuevas
+    url_metrics = f"https://financialmodelingprep.com/stable/key-metrics?symbol={ticker}&limit=1&apikey={FMP_API_KEY}"
+    url_ratios = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=1&apikey={FMP_API_KEY}"
+    url_growth = f"https://financialmodelingprep.com/stable/financial-growth?symbol={ticker}&limit=4&apikey={FMP_API_KEY}"
     
     try:
         m_resp = requests.get(url_metrics, timeout=5)
@@ -77,16 +77,18 @@ def fetch_quantitative_metrics(ticker: str) -> dict:
         g_json = g_resp.json()
         
         metrics = {}
-        # Extracción Anual desde Key-Metrics
+        
+        # 1. Extracción de Key Metrics
         if m_json and isinstance(m_json, list):
             data = m_json[0]
-            metrics['pe_ratio'] = data.get('peRatio', 0)
-            metrics['pb_ratio'] = data.get('pbRatio', 0)
-            metrics['roe'] = data.get('roe', 0)
-            metrics['roic'] = data.get('roic', 0)
-            metrics['debt_equity'] = data.get('debtToEquity', 0) # La variable aquí cambia a debtToEquity
+            # Uso de .get anidados para asegurar compatibilidad con llaves de la API stable
+            metrics['pe_ratio'] = data.get('peRatio', data.get('priceEarningsRatio', 0))
+            metrics['pb_ratio'] = data.get('pbRatio', data.get('priceToBookRatio', 0))
+            metrics['roe'] = data.get('roe', data.get('returnOnEquity', 0))
+            metrics['roic'] = data.get('roic', data.get('returnOnCapitalEmployed', 0))
+            metrics['debt_equity'] = data.get('debtToEquity', data.get('debtEquityRatio', 0))
 
-        # Extracción Anual desde Ratios
+        # 2. Extracción de Ratios Adicionales
         if r_json and isinstance(r_json, list):
             r_data = r_json[0]
             metrics['peg_ratio'] = r_data.get('pegRatio', 0)
@@ -94,7 +96,7 @@ def fetch_quantitative_metrics(ticker: str) -> dict:
             metrics['ebitda_margin'] = r_data.get('ebitdaMargin', 0) 
             metrics['payout_ratio'] = r_data.get('payoutRatio', 0)
 
-        # Crecimiento de Ingresos
+        # 3. Trayectoria de Crecimiento
         if g_json and isinstance(g_json, list) and len(g_json) > 0:
             metrics['revenue_growth'] = g_json[0].get('revenueGrowth', 0)
             rev_history = [period.get('revenueGrowth', 0) for period in g_json]
