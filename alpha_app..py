@@ -31,7 +31,7 @@ except (KeyError, Exception):
     st.error("Error Crítico de Configuración: Las claves de API no están definidas correctamente en .streamlit/secrets.toml.")
     st.stop()
 
-GEMINI_MODEL_NAME = 'gemini-1.5-flash'
+GEMINI_MODEL_NAME = 'gemini-2.5-flash'
 
 # =====================================================================
 # 2. CAPA DE EXTRACCIÓN DE DATOS: MEMOIZACIÓN Y RESILIENCIA
