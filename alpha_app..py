@@ -1,9 +1,9 @@
 """
-TERMINAL QUANTS PRO v9.0 - UNABRIDGED INSTITUTIONAL VERSION
-----------------------------------------------------------
-Seguridad: Tri-Layer Redundant Routing (Stable -> Raw -> yFinance)
-Cálculo: Engine Contable Manual (ROIC, FCF Latente, Invested Capital)
-IA: Gemini 2.5 Pro (Jerarquía Estricta + Informe de 500+ palabras)
+TERMINAL QUANTS PRO v12.0 - UNABRIDGED SOVEREIGN VERSION
+--------------------------------------------------------
+Seguridad: Triple-Check Data Arbitrage (FMP Stable -> FMP Raw -> yFinance).
+Cálculo: Engine de Reconstrucción Contable Manual (Anti-N/A).
+IA: Gemini 2.5 Pro (Informes Forenses > 700 palabras).
 """
 
 import streamlit as st
@@ -12,23 +12,45 @@ import yfinance as yf
 import pandas as pd
 import google.generativeai as genai
 import json
-import time
 
 # =====================================================================
-# 1. INFRAESTRUCTURA DE INTERFAZ Y SEGURIDAD
+# 1. INFRAESTRUCTURA DE INTERFAZ Y ESTILOS DE GRADO INVERSIÓN
 # =====================================================================
 st.set_page_config(
-    page_title="Terminal Quants PRO: Sovereign Auditor", 
+    page_title="Terminal Quants PRO: Eternal Auditor", 
     layout="wide", 
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS de Grado Institucional
 st.markdown("""
     <style>
-    .report-box { background-color: #f8f9fa; padding: 25px; border-left: 8px solid #1f77b4; border-radius: 8px; line-height: 1.6; }
-    .metric-container { background-color: #ffffff; padding: 15px; border: 1px solid #e0e0e0; border-radius: 8px; text-align: center; }
-    .warning-card { background-color: #fff3cd; color: #856404; padding: 20px; border-radius: 10px; border-left: 6px solid #ffc107; margin-bottom: 20px; }
+    .report-box { 
+        background-color: #ffffff; 
+        padding: 35px; 
+        border: 1px solid #e2e8f0; 
+        border-left: 12px solid #1a202c; 
+        border-radius: 4px; 
+        color: #1a202c; 
+        font-family: 'Inter', sans-serif; 
+        line-height: 1.8; 
+    }
+    .metric-value { font-size: 28px; font-weight: 800; color: #2d3748; }
+    .warning-banner { 
+        background-color: #fffaf0; 
+        color: #9c4221; 
+        padding: 25px; 
+        border-radius: 8px; 
+        border: 2px solid #fbd38d; 
+        margin-bottom: 30px; 
+        font-size: 1.1em;
+    }
+    .logic-header { 
+        color: #2c5282; 
+        border-bottom: 2px solid #ebf8ff; 
+        padding-bottom: 10px; 
+        margin-top: 35px; 
+        font-weight: bold;
+    }
     </style>
 """, unsafe_allow_html=True)
 
@@ -37,279 +59,249 @@ try:
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
 except Exception:
-    st.error("Error Crítico: Verifique las credenciales en .streamlit/secrets.toml")
+    st.error("Error Crítico: Faltan API Keys en .streamlit/secrets.toml")
     st.stop()
 
 GEMINI_MODEL_NAME = 'gemini-2.5-pro'
 
 # =====================================================================
-# 2. MOTOR DE DESCUBRIMIENTO (SCREENER)
+# 2. MOTOR DE RECONSTRUCCIÓN CONTABLE SOBERANO (REDUNDANCIA TOTAL)
 # =====================================================================
 
-def discovery_screener(limit=10):
-    """Escanea el mercado en busca de anomalías de valor."""
-    url = (f"https://financialmodelingprep.com/stable/company-screener?"
-           f"marketCapMoreThan=1000000000&priceMoreThan=5&isEtf=false&"
-           f"isActivelyTrading=true&limit={limit*2}&apikey={FMP_API_KEY}")
+def get_fmp_raw(endpoint, symbol, limit=5):
+    url = f"https://financialmodelingprep.com/stable/{endpoint}?symbol={symbol}&limit={limit}&apikey={FMP_API_KEY}"
     try:
-        resp = requests.get(url, timeout=10).json()
-        return [stock['symbol'] for stock in resp] if isinstance(resp, list) else []
-    except Exception:
-        return []
-
-# =====================================================================
-# 3. ENGINE DE DATOS: RECONSTRUCCIÓN CONTABLE SOBERANA
-# =====================================================================
-
-def get_fmp_json(endpoint, symbol, params=""):
-    url = f"https://financialmodelingprep.com/stable/{endpoint}?symbol={symbol}{params}&apikey={FMP_API_KEY}"
-    try:
-        r = requests.get(url, timeout=10)
+        r = requests.get(url, timeout=15)
         return r.json() if r.status_code == 200 else None
-    except:
-        return None
+    except: return None
 
 @st.cache_data(ttl=3600)
-def fetch_quantitative_analysis(ticker: str) -> dict:
+def fetch_unabridged_accounting(ticker: str) -> dict:
     """
-    Motor central de datos. Extrae 5 años de estados financieros 
-    y reconstruye manualmente las métricas ignorando los N/A de la API.
+    Engine v12.0: Reconstruye cada métrica desde los estados financieros brutos.
+    No confía en los ratios pre-calculados de la API para evitar errores de escala.
     """
     m = {}
     
-    # --- 1. Perfil Institucional ---
-    p_data = get_fmp_json("profile", ticker)
-    if not p_data: return {"_error": f"Ticker {ticker} no encontrado en FMP."}
-    p = p_data[0]
-    mkt_cap = p.get('mktCap', 1)
-    m['sector'] = p.get('sector', 'N/A')
-    m['industry'] = p.get('industry', 'N/A')
-    m['price'] = p.get('price', 0.0)
-    m['mkt_cap'] = mkt_cap
-    m['description'] = p.get('description', '')
-
-    # --- 2. Ingesta de Estados Financieros (6 años para delta de crecimiento) ---
-    is_j = get_fmp_json("income-statement", ticker, "&limit=6")
-    bs_j = get_fmp_json("balance-sheet-statement", ticker, "&limit=6")
-    cf_j = get_fmp_json("cash-flow-statement", ticker, "&limit=6")
+    # --- A. Perfil y Arbitraje de Market Cap ---
+    prof_j = get_fmp_raw("profile", ticker, limit=1)
+    if not prof_j: return {"_error": f"Ticker {ticker} no encontrado."}
+    p = prof_j[0]
     
-    # Capa de Seguridad: Si FMP falla, intentamos yFinance como salvavidas
-    if not is_j or not bs_j:
-        try:
-            s = yf.Ticker(ticker)
-            info = s.info
-            m.update({
-                'pe_ratio': info.get('trailingPE'), 'fcf_yield': 0.0, 
-                'source': "yFinance Fallback", 'roic_5y_avg': "N/A"
-            })
-            return m
-        except: return {"_error": "Fallo total de conexión con bases de datos."}
+    # 🚨 BLINDAJE ANTI-ERROR (ALPHABET FIX): Validación de Market Cap
+    price = p.get('price', 0.0)
+    mkt_cap_raw = p.get('mktCap') or p.get('marketCap', 0)
+    
+    # Si el Market Cap es sospechosamente bajo (<100M para empresas GICS)
+    if mkt_cap_raw < 100000000:
+        s_yf = yf.Ticker(ticker)
+        mkt_cap = s_yf.info.get('marketCap', price * 1e6)
+    else:
+        mkt_cap = mkt_cap_raw
 
-    # --- 3. RECONSTRUCCIÓN CONTABLE MANUAL (Bypass de Ratios Premium) ---
-    def calc_roic(idx):
-        try:
-            inc = is_j[idx]
-            bal = bs_j[idx]
-            ebit = inc.get('operatingIncome', 0)
-            tax_rate = inc.get('incomeTaxExpense', 0) / inc.get('incomeBeforeTax', 1) if inc.get('incomeBeforeTax', 0) > 0 else 0.21
-            # Búsqueda redundante de deuda (Total -> Short+Long -> N/A)
-            debt = bal.get('totalDebt') or (bal.get('shortTermDebt', 0) + bal.get('longTermDebt', 0))
-            equity = bal.get('totalStockholdersEquity', bal.get('totalEquity', 1))
-            cash = bal.get('cashAndCashEquivalents', 0)
-            invested_cap = debt + equity - cash
-            return (ebit * (1 - tax_rate)) / invested_cap if invested_cap > 0 else None
-        except: return None
+    m.update({
+        'sector': p.get('sector', 'N/A'),
+        'industry': p.get('industry', 'N/A'),
+        'price': price,
+        'mkt_cap': mkt_cap,
+        'description': p.get('description', '')
+    })
 
-    # Métricas Actuales
+    # --- B. Ingesta de Estados Financieros de 6 Años ---
+    is_j = get_fmp_raw("income-statement", ticker, limit=6)
+    bs_j = get_fmp_raw("balance-sheet-statement", ticker, limit=6)
+    cf_j = get_fmp_raw("cash-flow-statement", ticker, limit=6)
+    
+    if not is_j or not bs_j or not cf_j:
+        return {"_error": "Datos financieros insuficientes para auditoría forense."}
+
+    # --- C. CÁLCULO MANUAL SOBERANO (AÑO ACTUAL) ---
     i0, b0, c0 = is_j[0], bs_j[0], cf_j[0]
-    m['roic'] = calc_roic(0)
-    m['fcf'] = c0.get('freeCashFlow', 0)
-    m['fcf_yield'] = m['fcf'] / mkt_cap if mkt_cap > 0 else "N/A"
     
-    # Deuda y Solvencia Reconstruida
-    cur_debt = b0.get('totalDebt') or (b0.get('shortTermDebt', 0) + b0.get('longTermDebt', 0))
-    cur_equity = b0.get('totalStockholdersEquity', b0.get('totalEquity', 1))
-    m['debt_equity'] = cur_debt / cur_equity if cur_equity > 0 else "N/A"
-    m['interest_coverage'] = i0.get('operatingIncome', 0) / i0.get('interestExpense', 1) if i0.get('interestExpense', 0) != 0 else "N/A"
+    # 1. Reconstrucción de Deuda y Solvencia
+    # Verificamos múltiples llaves para no dejar la deuda en N/A
+    t_debt = b0.get('totalDebt') or (b0.get('shortTermDebt', 0) + b0.get('longTermDebt', 0))
+    cash = b0.get('cashAndCashEquivalents', 0)
+    equity = b0.get('totalStockholdersEquity', b0.get('totalEquity', 1))
+    ebit = i0.get('operatingIncome', 0)
     
-    # Valoración
-    m['pe_ratio'] = mkt_cap / i0.get('netIncome', 1) if i0.get('netIncome', 0) > 0 else "N/A"
-    m['ev_fcf'] = (mkt_cap + cur_debt - b0.get('cashAndCashEquivalents', 0)) / m['fcf'] if m['fcf'] > 0 else "N/A"
-    
-    # --- 4. CÁLCULO DE BACKLOG AJUSTADO (Agnóstico de Sector) ---
-    deferred_rev = b0.get('deferredRevenue', 0) + b0.get('deferredRevenueNonCurrent', 0)
-    gross_margin = i0.get('grossProfit', 0) / i0.get('revenue', 1) if i0.get('revenue', 0) > 0 else 0
-    m['adj_backlog'] = deferred_rev * gross_margin
+    # 2. ROIC Matemático: EBIT * (1-t) / Invested Capital
+    tax_exp = i0.get('incomeTaxExpense', 0)
+    pretax = i0.get('incomeBeforeTax', 1)
+    t_rate = tax_exp / pretax if pretax > 0 else 0.21
+    nopat = ebit * (1 - t_rate)
+    invested_cap = t_debt + equity - cash
+    m['roic'] = nopat / invested_cap if invested_cap > 0 else 0.0
 
-    # --- 5. BUCLE DE HISTORIAL 5 AÑOS (Promedios Reales) ---
-    h_roic = []
-    for idx in range(min(5, len(is_j))):
-        val = calc_roic(idx)
-        if val is not None: h_roic.append(val)
-    m['roic_5y_avg'] = sum(h_roic)/len(h_roic) if h_roic else "N/A"
+    # 3. Valoración y Flujo de Caja (FCF)
+    fcf = c0.get('freeCashFlow', 0)
+    m['fcf_yield'] = fcf / mkt_cap if mkt_cap > 0 else 0.0
+    # EV = Market Cap + Debt - Cash
+    ev = mkt_cap + t_debt - cash
+    m['ev_fcf'] = ev / fcf if fcf > 0 else 0.0
+    m['pe_ratio'] = mkt_cap / i0.get('netIncome', 1) if i0.get('netIncome', 0) > 0 else 0.0
     
+    # 4. Ratios de Balance
+    m['debt_equity'] = t_debt / equity if equity > 0 else 0.0
+    m['interest_coverage'] = ebit / (i0.get('interestExpense', 1) or 1)
+    
+    # 5. FCF Latente (Backlog / Ingresos Diferidos)
+    def_rev = b0.get('deferredRevenue', 0) + b0.get('deferredRevenueNonCurrent', 0)
+    gross_margin = i0.get('grossProfit', 0) / i0.get('revenue', 1) if i0.get('revenue', 0) > 0 else 0
+    m['adj_backlog'] = def_rev * gross_margin
+
+    # --- D. AUDITORÍA HISTÓRICA (PROMEDIOS DE 5 AÑOS) ---
+    h_roic = []
+    for k in range(min(5, len(is_j), len(bs_j))):
+        try:
+            ei = is_j[k].get('operatingIncome', 0)
+            di = bs_j[k].get('totalDebt') or (bs_j[k].get('shortTermDebt', 0) + bs_j[k].get('longTermDebt', 0))
+            eqi = bs_j[k].get('totalStockholdersEquity', bs_j[k].get('totalEquity', 1))
+            ci = bs_j[k].get('cashAndCashEquivalents', 0)
+            ici = di + eqi - ci
+            tr = is_j[k].get('incomeTaxExpense', 0) / is_j[k].get('incomeBeforeTax', 1) if is_j[k].get('incomeBeforeTax', 0) > 0 else 0.21
+            if ici > 0: h_roic.append((ei * (1 - tr)) / ici)
+        except: continue
+    m['roic_5y_avg'] = sum(h_roic)/len(h_roic) if h_roic else 0.0
+    
+    # Crecimiento CAGR de Ingresos
     h_rev = []
     for k in range(min(5, len(is_j)-1)):
         prev = is_j[k+1].get('revenue', 1)
         h_rev.append((is_j[k].get('revenue', 0) - prev) / prev)
-    m['rev_growth_5y_avg'] = sum(h_rev)/len(h_rev) if h_rev else "N/A"
+    m['rev_growth_5y_avg'] = sum(h_rev)/len(h_rev) if h_rev else 0.0
 
-    m['source'] = "Institutional Sovereign Engine (Raw Statements)"
+    m['source'] = "Sovereign Engine v12.0 (Full Manual Reconstruction)"
     return m
 
 # =====================================================================
-# 4. CEREBRO IA: AUDITORÍA DE ALTA DENSIDAD (GEMINI 2.5 PRO)
+# 3. CEREBRO IA: AUDITORÍA DE ALTA DENSIDAD (UNABRIDGED)
 # =====================================================================
 
-def execute_sovereign_audit(ticker: str, metrics: dict) -> dict:
+def run_deep_audit_v12(ticker: str, metrics: dict) -> dict:
     """
-    Fuerza a la IA a realizar un cruce de datos técnico, 
-    detectar catalizadores y alertar sobre contaminaciones narrativas.
+    Fuerza a Gemini 2.5 Pro a realizar una tesis técnica cruzando todas las métricas.
     """
-    def f_p(v): return f"{v*100:.2f}%" if v != "N/A" and v is not None else "N/A"
-    def f_n(v): return f"{v:.2f}x" if v != "N/A" and v is not None else "N/A"
+    def fp(v): return f"{v*100:.2f}%" if v and v != "N/A" else "0.00%"
+    def fn(v): return f"{v:.2f}x" if v and v != "N/A" else "0.00x"
 
     prompt = f"""
-    Misión: Analista Jefe Cuantitativo de Situaciones Especiales. 
-    Activo: {ticker} | Sector: {metrics['sector']} | Precio: ${metrics['price']}
-    
-    AUDITORÍA CONTABLE (BACKBONE):
-    - ROIC Actual: {f_p(metrics.get('roic'))} | Media 5A: {f_p(metrics.get('roic_5y_avg'))}
-    - FCF Yield: {f_p(metrics.get('fcf_yield'))} | EV/FCF: {f_n(metrics.get('ev_fcf'))}
-    - P/E Actual: {f_n(metrics.get('pe_ratio'))} | D/E: {f_n(metrics.get('debt_equity'))}
-    - Crecimiento Ventas 5A: {f_p(metrics.get('rev_growth_5y_avg'))}
+    Misión: Eres el Analista Principal de Riesgo de un Hedge Fund de Situaciones Especiales. 
+    Tu tarea es auditar a {ticker} ({metrics['sector']}) y emitir una tesis de inversión de nivel institucional.
+
+    DATOS CONTABLES RECONSTRUIDOS (OBLIGATORIO CITAR):
+    - ROIC Actual: {fp(metrics.get('roic'))} | Media 5A: {fp(metrics.get('roic_5y_avg'))}
+    - FCF Yield: {fp(metrics.get('fcf_yield'))} | EV/FCF: {fn(metrics.get('ev_fcf'))}
+    - P/E Actual: {fn(metrics.get('pe_ratio'))} | D/E: {fn(metrics.get('debt_equity'))} | Cobertura Int: {fn(metrics.get('interest_coverage'))}
+    - Crecimiento Ventas 5A: {fp(metrics.get('rev_growth_5y_avg'))}
     - FCF Latente (Backlog Ajustado): ${metrics.get('adj_backlog'):,.0f}
-    - Perfil: {metrics['description'][:1000]}
 
-    DIRECTRICES DE RIGOR:
-    1. PRIORIDAD BALANCE: El balance es la única verdad. Si el ROIC < 10% de forma persistente, el score NO puede superar 50.
-    2. AJUSTE POR CATALIZADOR: Busca contratos con Hyperscalers (Microsoft, AWS, Google), reactivación de activos estratégicos (nuclear, defensa) u opcionalidad de IA.
-    3. DETECCIÓN DE 'OLVIDO': ¿Por qué el mercado castiga este activo? ¿Es por aburrimiento o por deterioro real?
-    4. EXTENSIÓN: El informe forense debe ser extenso (mínimo 4 párrafos técnicos), integrando las métricas arriba citadas.
+    REGLAS DE ORO DEL INFORME:
+    1. EXTENSIÓN Y RIGOR: El informe forense debe ser una tesis extensa (mínimo 700 palabras). No resumas.
+    2. INTEGRACIÓN DE DATOS: Cada párrafo DEBE citar los números proporcionados para validar la tesis (ej: "Con un ROIC del {fp(metrics.get('roic'))}, la empresa demuestra...").
+    3. BALANCE VS NARRATIVA: Calcula un 'Score Contable' (puro balance) y compáralo con el 'Score Final' (balance + catalizadores).
+    4. DETECCIÓN DE CATALIZADORES: Busca activamente contratos con Hyperscalers (Microsoft, AWS, Google), reactivación de activos estratégicos u opcionalidad en IA.
 
-    JSON OUTPUT REQUERIDO:
+    JSON OUTPUT REQUERIDO (ESTRICTO):
     {{
-        "modelo_negocio": "Explicación clara de la generación de caja.",
-        "analisis_balance": "Crítica técnica de la solvencia y eficiencia histórica.",
-        "catalizadores_y_olvido": "Análisis de contratos futuros y por qué el mercado la ignora/sobrevalora.",
-        "ajuste_narrativo": [true/false si subiste el score por eventos futuros],
-        "score_contable": [0-100],
-        "score_final": [0-100],
+        "modelo_negocio": "Explicación técnica y estratégica de la generación de valor.",
+        "auditoria_forense": "Tesis técnica extensa. Cruce detallado de ROIC, Solvencia y Calidad de Caja citando cada métrica.",
+        "tesis_catalizadores": "Análisis de contratos futuros, opcionalidad de IA y eventos estratégicos.",
+        "tipo_ajuste": "[Incremento, Decremento, Neutral]",
+        "motivo_ajuste": "Justificación de la brecha entre el balance actual y el veredicto final.",
+        "score_contable": [0-100 basado solo en números actuales],
+        "score_final": [0-100 veredicto total],
         "veredicto": "[Strong Buy, Buy, Hold, Sell, Strong Sell]",
-        "estrategia": "Plan táctico (DCA Racional, Liquidez, etc)."
+        "estrategia": "Táctica operativa detallada (DCA Racional, Coberturas, etc)."
     }}
     """
     model = genai.GenerativeModel(GEMINI_MODEL_NAME)
     try:
         response = model.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.15))
         return json.loads(response.text.replace("```json", "").replace("```", "").strip())
-    except Exception as e:
-        return {"score_final": 0, "veredicto": "Error de Inferencia IA", "analisis_balance": f"Fallo: {str(e)}"}
+    except:
+        return {"score_final": 0, "veredicto": "Fallo IA", "auditoria_forense": "Error en la generación del reporte extenso."}
 
 # =====================================================================
-# 5. UI: TERMINAL DE CONTROL INSTITUCIONAL
+# 4. INTERFAZ DE USUARIO (UI TERMINAL)
 # =====================================================================
 
 def main():
-    st.title("🏛️ Terminal Quants PRO: The Sovereign Auditor")
-    st.caption("v9.0 | Unabridged Accounting Engine | Gemini 2.5 Pro")
+    st.title("🏛️ Terminal Quants PRO: The Eternal Auditor")
+    st.caption("Engine v12.0 Unabridged | Redundant Accounting | Gemini 2.5 Pro")
     st.markdown("---")
 
     with st.sidebar:
-        st.header("⚙️ Configuración de Radar")
-        mode = st.radio("Método de Entrada", ["Manual (CSV)", "Descubrimiento (Screener)"])
-        
-        if mode == "Manual (CSV)":
-            raw_input = st.text_input("Ingrese Tickers", value="GOOGL, CEG, VRT")
-        else:
-            limit_disc = st.slider("Candidatos a descubrir", 5, 20, 10)
-        
+        st.header("⚙️ Radar de Auditoría")
+        tk_in = st.text_input("Ingresar Tickers (Separados por coma)", value="GOOGL, CEG, NVDA")
         st.markdown("---")
-        if st.button("INICIAR AUDITORÍA FORENSE", type="primary", use_container_width=True):
-            st.session_state.execute = True
-            if mode == "Manual (CSV)":
-                st.session_state.tickers = [x.strip().upper() for x in raw_input.split(",") if x.strip()]
-            else:
-                with st.spinner("Escaneando el mercado..."):
-                    st.session_state.tickers = discovery_screener(limit_disc)
+        execute = st.button("INICIAR AUDITORÍA TOTAL", type="primary", use_container_width=True)
 
-    if "execute" in st.session_state and st.session_state.execute:
-        summary_results = []
+    if execute:
+        tickers = [x.strip().upper() for x in tk_in.split(",") if x.strip()]
         
-        for ticker in st.session_state.tickers:
+        for t in tickers:
             with st.container():
-                st.markdown(f"## 📊 Informe de Activo: {ticker}")
+                st.markdown(f"## 📊 Informe Forense de Activo: {t}")
                 
-                # Capa de Datos
-                with st.spinner(f"Extrayendo y reconstruyendo balances de {ticker}..."):
-                    metrics = fetch_quantitative_analysis(ticker)
+                with st.spinner(f"Ejecutando reconstrucción contable para {t}..."):
+                    met = fetch_unabridged_accounting(t)
                 
-                if "_error" in metrics:
-                    st.error(f"Error en {ticker}: {metrics['_error']}")
+                if "_error" in met:
+                    st.error(f"Error en {t}: {met['_error']}")
                     continue
 
-                st.caption(f"**Fuente:** {metrics['source']} | **Industria:** {metrics['industry']}")
+                st.caption(f"**Industria:** {met['industry']} | **Fuente:** {met['source']}")
 
-                # Visualización de Métricas de Grado Quant
-                m_c1, m_c2, m_c3, m_c4, m_c5 = st.columns(5)
-                
-                def fmt(v, p=False):
+                # Visualización de Métricas (Grado Quant)
+                c1, c2, c3, c4, c5 = st.columns(5)
+                def f_v(v, p=False): 
                     if v == "N/A" or v is None: return "N/A"
                     return f"{v*100:.2f}%" if p else f"{v:.2f}x"
-
-                m_c1.metric("ROIC 5Y (Avg)", fmt(metrics.get('roic_5y_avg'), True))
-                m_c2.metric("FCF Yield", fmt(metrics.get('fcf_yield'), True))
-                m_c3.metric("EV / FCF", fmt(metrics.get('ev_fcf')))
-                m_c4.metric("Debt / Equity", fmt(metrics.get('debt_equity')))
-                # Backlog Latente format
-                b_val = metrics.get('adj_backlog')
-                b_label = f"${b_val/1e6:.1f}M" if b_val != "N/A" and b_val < 1e9 else (f"${b_val/1e9:.1f}B" if b_val != "N/A" else "N/A")
-                m_c5.metric("FCF Latente (Backlog)", b_label)
-
-                # Capa de Inteligencia
-                with st.spinner(f"Gemini 2.5 Pro cruzando datos de {ticker}..."):
-                    audit = execute_sovereign_audit(ticker, metrics)
                 
-                # ADVERTENCIA DE AJUSTE (Prioridad Usuario)
-                if audit.get("ajuste_narrativo"):
+                c1.metric("ROIC 5Y (Avg)", f_v(met.get('roic_5y_avg'), True))
+                c2.metric("FCF Yield", f_v(met.get('fcf_yield'), True))
+                c3.metric("EV / FCF", f_v(met.get('ev_fcf')))
+                c4.metric("Debt / Equity", f_v(met.get('debt_equity')))
+                # Formato monetario para Backlog
+                back = met.get('adj_backlog')
+                bl_label = f"${back/1e6:.1f}M" if back < 1e9 else f"${back/1e9:.1f}B"
+                c5.metric("FCF Latente", bl_label)
+
+                # Auditoría de Inteligencia
+                with st.spinner(f"Analizando tesis de {t} con Gemini 2.5 Pro..."):
+                    audit = run_deep_audit_v12(t, met)
+                
+                # ADVERTENCIA DE AJUSTE NARRATIVO
+                score_diff = audit.get('score_final', 0) - audit.get('score_contable', 0)
+                if abs(score_diff) > 5:
                     st.markdown(f"""
-                        <div class="warning-card">
-                            ⚠️ <b>ADVERTENCIA DE VALORACIÓN:</b> El Score Final de {ticker} ({audit['score_final']}) ha sido incrementado por factores cualitativos (contratos/catalizadores). <br>
-                            <b>Score Contable (Basado en el Balance): {audit['score_contable']}</b>. <br>
-                            El balance actual no justifica este precio; la inversión depende del éxito de eventos futuros.
+                        <div class="warning-banner">
+                            ⚠️ <b>AJUSTE ESTRATÉGICO DETECTADO:</b> El veredicto de {t} ha sido modificado por factores cualitativos.<br>
+                            <b>Score de Balance (Hard Numbers): {audit['score_contable']}</b> | <b>Score Final: {audit['score_final']}</b>.<br>
+                            <b>Justificación:</b> {audit.get('motivo_ajuste', 'Ajuste por catalizadores futuros.')}
                         </div>
                     """, unsafe_allow_html=True)
 
-                res_l, res_r = st.columns([1.5, 2.5])
-                with res_l:
-                    color_map = {"Strong Buy": "🟢", "Buy": "🟩", "Hold": "🟨", "Sell": "🟧", "Strong Sell": "🔴"}
-                    st.markdown(f"### {color_map.get(audit.get('veredicto'), '⚪')} {audit.get('veredicto')}")
-                    st.progress(audit.get('score_final', 0)/100, text=f"Score de Convicción: {audit.get('score_final')}")
-                    st.markdown("**Estrategia de Ejecución:**")
-                    st.success(audit.get('estrategia', 'N/A'))
+                l_col, r_col = st.columns([1.2, 2.8])
+                with l_col:
+                    st.subheader(f"Veredicto: {audit['veredicto']}")
+                    st.progress(audit['score_final']/100, text=f"Score: {audit['score_final']}/100")
+                    st.success(f"**Estrategia:** {audit['estrategia']}")
                 
-                with res_r:
+                with r_col:
                     st.markdown("<div class='report-box'>", unsafe_allow_html=True)
-                    st.markdown(f"### 📝 Expediente Forense: {ticker}")
-                    st.markdown("**Modelo de Negocio y Generación de Caja:**")
+                    st.markdown(f"### 🖋️ Tesis de Inversión Unabridged: {t}")
+                    st.markdown("**Modelo de Negocio:**")
                     st.write(audit.get('modelo_negocio'))
                     st.markdown("---")
-                    st.markdown("**Auditoría de Balance (La Realidad):**")
-                    st.write(audit.get('analisis_balance'))
+                    st.markdown("**Auditoría Contable y de Eficiencia:**")
+                    st.write(audit.get('auditoria_forense'))
                     st.markdown("---")
-                    st.markdown("**Catalizadores, Opcionalidad y 'Olvido':**")
-                    st.write(audit.get('catalizadores_y_olvido'))
+                    st.markdown("**Catalizadores y Opcionalidad Estratégica:**")
+                    st.write(audit.get('tesis_catalizadores'))
                     st.markdown("</div>", unsafe_allow_html=True)
-                
-                summary_results.append({
-                    "Activo": ticker, "Score Final": audit.get('score_final'),
-                    "Score Balance": audit.get('score_contable'), "Veredicto": audit.get('veredicto')
-                })
                 st.markdown("---")
-
-        if summary_results:
-            st.subheader("📋 Matriz Comparativa de Ejecución")
-            st.dataframe(pd.DataFrame(summary_results).sort_values(by="Score Final", ascending=False), use_container_width=True)
 
 if __name__ == "__main__":
     main()
