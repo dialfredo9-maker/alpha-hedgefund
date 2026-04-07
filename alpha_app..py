@@ -1,19 +1,16 @@
 """
 Plataforma Institucional de Análisis Fundamental y Clasificación de Arquetipos
-Arquitectura Optimizada: Streamlit, yfinance (Sectorización), API FMP (Bulk Metrics), y Google Gemini AI.
+Arquitectura PRO: FMP API (Starter - 5Y Historical Data), Scoring y Google Gemini AI.
 """
 
 import streamlit as st
-import yfinance as yf
 import requests
 import pandas as pd
 import google.generativeai as genai
-from urllib.error import HTTPError
 import json
-import time
 
 # =====================================================================
-# 1. CONFIGURACIÓN DEL ENTORNO, GESTIÓN DE ESTADO Y SECRETS
+# 1. CONFIGURACIÓN DEL ENTORNO Y SECRETS
 # =====================================================================
 st.set_page_config(
     page_title="Terminal Institucional: Arquetipos Financieros", 
@@ -21,264 +18,268 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Inicialización segura de claves de API
 try:
-    # Corrección: Acceso explícito a las llaves en el diccionario de secretos
     FMP_API_KEY = st.secrets["FMP_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
 except (KeyError, Exception):
-    st.error("Error Crítico de Configuración: Las claves de API no están definidas correctamente en .streamlit/secrets.toml.")
+    st.error("Error Crítico: Configura las API Keys en .streamlit/secrets.toml.")
     st.stop()
 
-GEMINI_MODEL_NAME = 'gemini-2.5-flash'
+GEMINI_MODEL_NAME = 'gemini-1.5-flash'
 
 # =====================================================================
-# 2. CAPA DE EXTRACCIÓN DE DATOS: MEMOIZACIÓN Y RESILIENCIA
+# 2. CAPA DE EXTRACCIÓN DE DATOS: HISTÓRICO DE 5 AÑOS (STARTER PLAN)
 # =====================================================================
 
 @st.cache_data(ttl=86400)
-def fetch_sectorial_taxonomy(ticker: str) -> dict:
-    """Recupera el mapeo ontológico GICS utilizando yfinance."""
+def fetch_fmp_profile(ticker: str) -> dict:
+    url_profile = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={FMP_API_KEY}"
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        return {
-            "sector": info.get("sector", "Desconocido"),
-            "industry": info.get("industry", "Desconocido"),
-            "market_cap": info.get("marketCap", 0),
-            "beta": info.get("beta", 1.0)
-        }
-    except Exception as e:
-        return {"error": str(e), "sector": "Desconocido", "industry": "Desconocido"}
+        resp = requests.get(url_profile, timeout=5).json()
+        if resp and isinstance(resp, list):
+            data = resp[0]
+            return {
+                "sector": data.get("sector", "Desconocido"),
+                "industry": data.get("industry", "Desconocido"),
+                "price": data.get("price", 0.0)
+            }
+        return {"sector": "Desconocido", "industry": "Desconocido", "price": 0.0}
+    except:
+        return {"sector": "Desconocido", "industry": "Desconocido", "price": 0.0}
 
 @st.cache_data(ttl=3600)
 def fetch_quantitative_metrics(ticker: str) -> dict:
-    """
-    Motor de Extracción compatible con FMP Plan Starter 2026.
-    Utiliza la nueva arquitectura '/stable/' y endpoints anuales.
-    """
-    # Rutas Oficiales /stable/ para cuentas nuevas
-    url_metrics = f"https://financialmodelingprep.com/stable/key-metrics?symbol={ticker}&limit=1&apikey={FMP_API_KEY}"
-    url_ratios = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=1&apikey={FMP_API_KEY}"
-    url_growth = f"https://financialmodelingprep.com/stable/financial-growth?symbol={ticker}&limit=4&apikey={FMP_API_KEY}"
+    """Motor de Extracción Profunda. Utiliza el límite de 5 años del Plan Starter."""
+    url_metrics = f"https://financialmodelingprep.com/stable/key-metrics?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
+    url_ratios = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
+    url_growth = f"https://financialmodelingprep.com/stable/financial-growth?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
     
+    metrics = {}
+    
+    def calc_avg(data_list, key1, key2=None):
+        """Calcula el promedio de 5 años omitiendo valores nulos."""
+        vals = []
+        for d in data_list:
+            v = d.get(key1) if d.get(key1) is not None else (d.get(key2) if key2 else None)
+            if v is not None: vals.append(v)
+        return sum(vals) / len(vals) if vals else "N/A"
+
     try:
-        m_resp = requests.get(url_metrics, timeout=5)
-        r_resp = requests.get(url_ratios, timeout=5)
-        g_resp = requests.get(url_growth, timeout=5)
+        m_resp = requests.get(url_metrics, timeout=5).json()
+        r_resp = requests.get(url_ratios, timeout=5).json()
+        g_resp = requests.get(url_growth, timeout=5).json()
         
-        m_resp.raise_for_status()
-        r_resp.raise_for_status()
-        g_resp.raise_for_status()
-        
-        m_json = m_resp.json()
-        r_json = r_resp.json()
-        g_json = g_resp.json()
-        
-        metrics = {}
-        
-        # 1. Extracción de Key Metrics
-        if m_json and isinstance(m_json, list):
-            data = m_json[0]
-            # Uso de .get anidados para asegurar compatibilidad con llaves de la API stable
-            metrics['pe_ratio'] = data.get('peRatio', data.get('priceEarningsRatio', 0))
-            metrics['pb_ratio'] = data.get('pbRatio', data.get('priceToBookRatio', 0))
-            metrics['roe'] = data.get('roe', data.get('returnOnEquity', 0))
-            metrics['roic'] = data.get('roic', data.get('returnOnCapitalEmployed', 0))
-            metrics['debt_equity'] = data.get('debtToEquity', data.get('debtEquityRatio', 0))
-
-        # 2. Extracción de Ratios Adicionales
-        if r_json and isinstance(r_json, list):
-            r_data = r_json[0]
-            metrics['peg_ratio'] = r_data.get('pegRatio', 0)
-            metrics['dividend_yield'] = r_data.get('dividendYield', 0)
-            metrics['ebitda_margin'] = r_data.get('ebitdaMargin', 0) 
-            metrics['payout_ratio'] = r_data.get('payoutRatio', 0)
-
-        # 3. Trayectoria de Crecimiento
-        if g_json and isinstance(g_json, list) and len(g_json) > 0:
-            metrics['revenue_growth'] = g_json[0].get('revenueGrowth', 0)
-            rev_history = [period.get('revenueGrowth', 0) for period in g_json]
-            metrics['structural_decline'] = all(g < 0 for g in rev_history[:3])
-        else:
-            metrics['revenue_growth'] = 0
-            metrics['structural_decline'] = False
+        # 1. Datos Actuales (Reporte más reciente -> índice 0)
+        if m_resp and isinstance(m_resp, list):
+            curr_m = m_resp[0]
+            metrics['pe_ratio'] = curr_m.get('peRatio', curr_m.get('priceEarningsRatio', "N/A"))
+            metrics['pb_ratio'] = curr_m.get('pbRatio', curr_m.get('priceToBookRatio', "N/A"))
+            metrics['roe'] = curr_m.get('roe', curr_m.get('returnOnEquity', "N/A"))
+            metrics['roic'] = curr_m.get('roic', curr_m.get('returnOnCapitalEmployed', "N/A"))
+            metrics['debt_equity'] = curr_m.get('debtToEquity', curr_m.get('debtEquityRatio', "N/A"))
             
-        return metrics
-    except Exception as e:
-        st.warning(f"Excepción de conectividad FMP para {ticker}: {e}")
-        return {}
+            # Promedios Históricos (5 Años)
+            metrics['roic_5y_avg'] = calc_avg(m_resp, 'roic', 'returnOnCapitalEmployed')
+            metrics['pe_5y_avg'] = calc_avg(m_resp, 'peRatio', 'priceEarningsRatio')
+
+        if r_resp and isinstance(r_resp, list):
+            curr_r = r_resp[0]
+            metrics['peg_ratio'] = curr_r.get('pegRatio', "N/A")
+            metrics['dividend_yield'] = curr_r.get('dividendYield', "N/A")
+            metrics['ebitda_margin'] = curr_r.get('ebitdaMargin', "N/A")
+            
+            metrics['margin_5y_avg'] = calc_avg(r_resp, 'ebitdaMargin')
+
+        if g_resp and isinstance(g_resp, list) and len(g_resp) > 0:
+            metrics['revenue_growth'] = g_resp[0].get('revenueGrowth', "N/A")
+            metrics['rev_growth_5y_avg'] = calc_avg(g_resp, 'revenueGrowth')
+            
+            rev_history = [period.get('revenueGrowth', 0) for period in g_resp]
+            metrics['structural_decline'] = all(g is not None and g < 0 for g in rev_history[:3])
+        else:
+            metrics['revenue_growth'] = "N/A"
+            metrics['rev_growth_5y_avg'] = "N/A"
+            metrics['structural_decline'] = False
+
+    except Exception:
+        pass 
+
+    # Normalización de N/A
+    clean_metrics = {k: (v if v is not None else "N/A") for k, v in metrics.items()}
+    clean_metrics['structural_decline'] = metrics.get('structural_decline', False)
+    return clean_metrics
 
 # =====================================================================
-# 3. NÚCLEO ALGORÍTMICO: MOTOR DE UMBRALES DINÁMICOS MULTI-SECTOR
+# 3. NÚCLEO ALGORÍTMICO: MOTOR EVOLUCIONADO (SERIES DE TIEMPO)
 # =====================================================================
 
 def evaluate_financial_archetype(sector: str, metrics: dict) -> tuple:
-    """Evalúa condicionalmente el vector de métricas contra umbrales mutables."""
-    if not metrics:
-        return "Análisis Abortado", "Datos fundamentales insuficientes para ejecución heurística."
+    def get_num(key, default=0):
+        val = metrics.get(key)
+        return float(val) if val != "N/A" else default
 
-    rev_growth_p = metrics.get('revenue_growth', 0) * 100
-    ebitda_margin_p = metrics.get('ebitda_margin', 0) * 100
-    roe_p = metrics.get('roe', 0) * 100
-    roic_p = metrics.get('roic', 0) * 100
-    div_yield_p = metrics.get('dividend_yield', 0) * 100
-    debt_to_equity = metrics.get('debt_equity', 0)
-    pb_ratio = metrics.get('pb_ratio', 0)
-    pe_ratio = metrics.get('pe_ratio', 0)
+    roic_current = get_num('roic') * 100
+    roic_5y = get_num('roic_5y_avg') * 100
+    rev_growth_5y = get_num('rev_growth_5y_avg') * 100
+    margin_5y = get_num('margin_5y_avg') * 100
+    debt_to_equity = get_num('debt_equity')
+    pb_ratio = get_num('pb_ratio')
+    pe_ratio = get_num('pe_ratio')
+    pe_5y = get_num('pe_5y_avg')
 
-    # 1. Filtro Excluyente Primario: Trampa de Valor
+    # 1. Trampa de Valor Confirmada por Tendencia
     if metrics.get('structural_decline') and debt_to_equity > 2.0:
-        if pb_ratio < 1.5 or pe_ratio < 15:
-            return "Trampa de Valor (Value Trap)", "Anomalía detectada: La valoración baja es engañosa. Ocurre una contracción secular de ingresos exacerbada por un apalancamiento agresivo."
+        return "Trampa de Valor Histórica", "Contracción de ingresos sostenida por múltiples periodos y riesgo de solvencia."
 
-    # 2. Motor Institucional: Financieras y Banca
+    # 2. Financieras
     if sector in ['Financial Services', 'Financials', 'Banks']:
-        if roe_p > 10.0 and pb_ratio < 1.5:
-            return "Financiera Prime (P/B-ROE Model)", f"Eficiencia de patrimonio óptima (ROE: {roe_p:.1f}%) con descuento contable (P/B: {pb_ratio:.2f}x)."
-        elif roe_p < 6.0:
-            return "Financiera Deteriorada", f"Incapacidad de superar el coste del capital social (ROE: {roe_p:.1f}%)."
-        else:
-            return "Financiera Consolidada", "Evaluación neutral en los modelos de fijación de precios bancarios."
+        if get_num('roe') * 100 > 10.0 and 0 < pb_ratio < 1.5: return "Financiera Prime", "ROE de doble dígito transando a descuento."
+        return "Financiera Promedio", "Métricas bancarias sin anomalías positivas."
 
-    # 3. Motor de Rendimiento: Utilities y REITs
-    if sector in ['Utilities', 'Real Estate']:
-        if div_yield_p > 3.5 and metrics.get('payout_ratio', 1) < 0.95:
-            return "Generador de Rendimiento Sólido", f"Flujos inelásticos asegurando un dividendo del {div_yield_p:.2f}%, sostenido por métricas de pago razonables."
-        else:
-            return "Rendimiento Amenazado (Cut Risk)", "El rendimiento ofrecido no compensa el riesgo del sector o el ratio de pago denota estrés inminente."
-
-    # 4. Motor de Hipercrecimiento: Rule of 40
+    # 3. SaaS/Tech (Rule of 40 a 5 años)
     if sector in ['Technology', 'Communication Services']:
-        rule_of_40_score = rev_growth_p + ebitda_margin_p
-        if rule_of_40_score >= 40.0:
-            return "SaaS/Tech Elite (Rule of 40)", f"Fuerte sincronización operativa; score de {rule_of_40_score:.1f}% (Crecimiento: {rev_growth_p:.1f}%, Margen: {ebitda_margin_p:.1f}%)."
+        if (rev_growth_5y + margin_5y) >= 40.0:
+            return "SaaS/Tech Elite Consolidada", f"Supera la Rule of 40 en promedio histórico (Score 5Y: {rev_growth_5y + margin_5y:.1f}%)."
 
-    # 5. Motor Híbrido: GARP
-    peg = metrics.get('peg_ratio', 99)
-    if 0 < peg < 1.0 and 10 < pe_ratio < 25:
-        return "GARP (Growth at a Reasonable Price)", f"Oportunidad asimétrica; fuerte expansión no descontada (PEG ratio: {peg:.2f})."
+    # 4. Calidad y Moat (Foso Económico Demostrado)
+    base_roic = 20.0 if sector == 'Aerospace/Defense' else 10.0 if sector in ['Energy', 'Basic Materials', 'Industrials'] else 15.0
+    # Exigimos que tanto el actual como el promedio de 5 años superen el umbral para ser un "Moat" real
+    if roic_current > base_roic and roic_5y > base_roic and debt_to_equity < 1.5:
+        return "Monopolio Operativo (Deep Moat)", f"Excelencia consistente: ROIC actual {roic_current:.1f}%, Promedio 5A {roic_5y:.1f}%."
 
-    # 6. Motor de Calidad y Moats
-    base_roic_threshold = 15.0 
-    if sector == 'Aerospace/Defense': 
-        base_roic_threshold = 20.0
-    elif sector in ['Energy', 'Basic Materials', 'Industrials']: 
-        base_roic_threshold = 10.0 
-    
-    if roic_p > base_roic_threshold and debt_to_equity < 1.5:
-        return "Compuesto de Alta Calidad (Moat)", f"Excelencia en la asignación de capital operativo (ROIC del {roic_p:.1f}%) sin dependencia de deuda tóxica."
+    # 5. Valor Profundo vs Histórico
+    if 0 < pe_ratio < pe_5y * 0.7 and 0 < pb_ratio < 1.2:
+         return "Deep Value (Descuento Histórico)", f"Transando a un 30%+ de descuento respecto a su media histórica de P/E."
 
-    # 7. Motor de Valor Residual
-    if 0 < pb_ratio < 1.2 and 0 < pe_ratio < 12 and not metrics.get('structural_decline'):
-         return "Valor Profundo Confirmado", f"Múltiplos en niveles de liquidación o desilusión máxima (P/B: {pb_ratio:.2f}) con fundamentales estabilizados."
-
-    return "Cíclica Indefinida o Clasificación Neutral", "Los datos carecen de desviaciones suficientes para disparar algoritmos de convicción."
+    return "Clasificación Neutral", "No dispara alertas de convicción a nivel histórico."
 
 # =====================================================================
-# 4. INGENIERÍA DE PROMPTS ORIGINAL Y AUDITORÍA DE IA
+# 4. PROMPT HÍBRIDO: TEXTO LIBRE RIGUROSO + JSON DECISIONAL
 # =====================================================================
 
-def execute_ai_risk_audit(ticker: str, sector: str, archetype: str, metrics: dict) -> str:
-    """Fuerza a Gemini a realizar un análisis en segunda derivada."""
+def execute_ai_risk_audit(ticker: str, sector: str, archetype: str, metrics: dict, price: float) -> dict:
+    def f_pct(val): return f"{val*100:.1f}%" if val != "N/A" else "N/A"
+    def f_num(val): return f"{val:.2f}" if val != "N/A" else "N/A"
+
     prompt = f"""
-    Misión: Actúa como el Analista Jefe de Riesgos Cuantitativos de un Fondo de Cobertura.
+    Misión: Eres el Analista Jefe Cuantitativo de un Fondo Institucional.
+    Activo: {ticker} | Sector: {sector} | Precio: ${price}
+    Arquetipo Asignado: '{archetype}'
     
-    Contexto de Evaluación:
-    - Entidad: {ticker}
-    - Segmento GICS: {sector}
-    - Clasificación Algorítmica Preliminar: '{archetype}'
+    Métricas Clave (Actual vs Promedio 5 Años):
+    - ROIC: Actual {f_pct(metrics.get('roic'))} | Promedio 5A: {f_pct(metrics.get('roic_5y_avg'))}
+    - Crec. Ventas: Actual {f_pct(metrics.get('revenue_growth'))} | Promedio 5A: {f_pct(metrics.get('rev_growth_5y_avg'))}
+    - P/E Ratio: Actual {f_num(metrics.get('pe_ratio'))} | Promedio 5A: {f_num(metrics.get('pe_5y_avg'))}
+    - Deuda/Patrimonio: {f_num(metrics.get('debt_equity'))}
+    - PEG Ratio: {f_num(metrics.get('peg_ratio'))}
     
-    Vector de Datos Suministrado:
-    - Dinámica de Ventas (YoY): {metrics.get('revenue_growth', 0)*100:.1f}%
-    - Eficiencia de Capital Operativo (ROIC): {metrics.get('roic', 0)*100:.1f}%
-    - Múltiplo Precio/Beneficio al Crecimiento (PEG): {metrics.get('peg_ratio', 'N/A')}
-    - Apalancamiento Estructural (Debt/Equity): {metrics.get('debt_equity', 'N/A')}
-    - Prima Contable (P/B Ratio): {metrics.get('pb_ratio', 'N/A')}
-    
-    Instrucciones Estrictas:
-    Basado en finanzas corporativas rigurosas, redacta una evaluación de no más de 3 párrafos formales abordando:
-    1. Confirmación o refutación de la clasificación '{archetype}' en base a las distorsiones comunes del sector.
-    2. Identificación del Foso Económico (Moat) o vulnerabilidades estructurales inherentes a este modelo de negocio.
-    3. Alertas sobre falacias contables (p.ej. impacto silencioso de opciones sobre acciones en tecnológicas o la amenaza inminente de los tipos de interés en utilidades).
-    NO uses listas, mantén un formato de narrativa fluida y altamente técnica.
+    Instrucciones: Analiza rigurosamente la sostenibilidad del negocio y entrega tu output EXCLUSIVAMENTE en el siguiente formato JSON.
+    {{
+        "texto_libre": "Un único párrafo de texto libre (extenso y riguroso) evaluando la resiliencia del modelo de negocio, el foso económico frente al historial de 5 años, e identificando falacias contables o vulnerabilidades macro.",
+        "score": [Número entero del 0 al 100],
+        "veredicto": "[Elegir: Strong Buy, Buy, Hold, Sell, Strong Sell]",
+        "estrategia": "Sugerencia operativa enfocada en gestión de flujo de caja de mediano plazo. Ejemplos de estilo: 'Iniciar DCA mensual agresivo utilizando herramientas de inversión fraccionada como Racional', o 'Rotar exposición a liquidez en dólares/euros debido a sobrevaloración histórica', etc."
+    }}
     """
     try:
         model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.types.GenerationConfig(temperature=0.2)
-        )
-        return response.text
+        response = model.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.2))
+        
+        raw_text = response.text.replace("```json", "").replace("```", "").strip()
+        return json.loads(raw_text)
     except Exception as e:
-        return f"Error en la auditoría de inferencia del LLM: {str(e)}"
+        return {"texto_libre": f"Error IA: {str(e)}", "score": 0, "veredicto": "Hold", "estrategia": "Error en parseo."}
 
 # =====================================================================
-# 5. DESPLIEGUE DEL FRONTEND
+# 5. UI: TABLERO DE CONTROL INSTITUCIONAL
 # =====================================================================
 
 def main():
-    st.title("🏛️ Plataforma Institucional: Arquetipos Financieros y Análisis Cuantitativo")
-    st.markdown("Motor heurístico de umbrales dinámicos apalancado por FMP, yfinance y validación de Segunda Derivada mediante Google Gemini.")
+    st.title("🏛️ Terminal Quants: Análisis Histórico & Ejecución")
+    st.markdown("Motor apalancado en Series de Tiempo de 5 Años (FMP) y Dictamen de Ejecución IA.")
 
     with st.sidebar:
-        st.header("Configuración de Portafolio")
-        tickers_raw = st.text_input("Símbolos Bursátiles (Ticker CSV)", value="MSFT, JPM, O, LMT, INTC")
+        st.header("Cribado de Activos")
+        tickers_raw = st.text_input("Tickers (separados por coma)", value="NVDA, MSFT, O")
         st.markdown("---")
-        st.caption("Arquitectura diseñada para mitigar el sesgo estático de valoración.")
-        execute_button = st.button("Ejecutar Modelado Institucional", type="primary")
+        execute_button = st.button("Ejecutar Análisis y Scoring", type="primary", use_container_width=True)
 
     if execute_button:
         tickers = [t.strip().upper() for t in tickers_raw.split(",") if t.strip()]
-        
         if not tickers:
-            st.error("Protocolo fallido: Proporcione al menos un símbolo bursátil.")
+            st.error("Proporcione al menos un símbolo bursátil.")
             return
 
-        st.subheader("Auditoría Multifactorial en Tiempo Real")
-        ui_progress = st.progress(0)
-        
-        # Inicialización de lista de resultados para el DataFrame final
         portfolio_results = []
         
-        for index, ticker in enumerate(tickers):
-            with st.expander(f"Expediente de Valoración: {ticker}", expanded=True):
+        for ticker in tickers:
+            with st.container():
+                st.markdown(f"## 📈 {ticker}")
                 
-                taxonomy = fetch_sectorial_taxonomy(ticker)
-                sector_gics = taxonomy.get("sector", "Desconocido")
-                st.write(f"**Atribución Sectorial (GICS):** {sector_gics} | **Clúster Industrial:** {taxonomy.get('industry', 'Desconocida')}")
+                profile = fetch_fmp_profile(ticker)
+                sector_gics = profile.get("sector", "Desconocido")
+                current_price = profile.get("price", 0.0)
                 
                 raw_metrics = fetch_quantitative_metrics(ticker)
                 
-                if not raw_metrics:
-                    st.warning(f"Insuficiencia de datos métricos primarios para {ticker}.")
+                if not raw_metrics or raw_metrics.get('pe_ratio') == "N/A":
+                    st.warning(f"Datos fundamentales insuficientes en FMP para {ticker}.")
+                    st.markdown("---")
                     continue
                 
                 archetype_label, rationale = evaluate_financial_archetype(sector_gics, raw_metrics)
                 
-                st.success(f"**Identidad de Arquetipo:** {archetype_label}")
-                st.info(f"**Racionalidad Matemática:** {rationale}")
+                st.caption(f"**Sector:** {sector_gics} | **Precio Mkt:** ${current_price}")
                 
-                with st.spinner('Ejecutando proceso de inferencia LLM...'):
-                    risk_insight = execute_ai_risk_audit(ticker, sector_gics, archetype_label, raw_metrics)
-                    st.markdown("#### 🧠 Dictamen de Riesgo (Modelado Cualitativo IA)")
-                    st.write(risk_insight)
+                # Fila de métricas comparativas (Actual vs 5 Años)
+                col1, col2, col3, col4 = st.columns(4)
+                def fmt_m(val, is_pct=False):
+                    if val == "N/A": return "N/A"
+                    return f"{val*100:.1f}%" if is_pct else f"{val:.2f}x"
+
+                col1.metric("Arquetipo Táctico", archetype_label)
+                col2.metric("ROIC (Actual vs Media 5Y)", fmt_m(raw_metrics.get('roic'), True), delta=fmt_m(raw_metrics.get('roic_5y_avg'), True), delta_color="off")
+                col3.metric("Crecimiento (Actual vs 5Y)", fmt_m(raw_metrics.get('revenue_growth'), True), delta=fmt_m(raw_metrics.get('rev_growth_5y_avg'), True), delta_color="off")
+                col4.metric("P/E (Actual vs Media 5Y)", fmt_m(raw_metrics.get('pe_ratio')), delta=fmt_m(raw_metrics.get('pe_5y_avg')), delta_color="inverse")
+                
+                st.info(f"**Justificación Algorítmica:** {rationale}")
+                
+                with st.spinner('Auditando histórico y generando tesis...'):
+                    ai_data = execute_ai_risk_audit(ticker, sector_gics, archetype_label, raw_metrics, current_price)
+                    
+                    st.markdown("### 🧠 Veredicto Institucional y Tesis de Inversión")
+                    
+                    color_map = {"Strong Buy": "🟢", "Buy": "🟩", "Hold": "🟨", "Sell": "🟧", "Strong Sell": "🔴"}
+                    icon = color_map.get(ai_data.get("veredicto", "Hold"), "⚪")
+                    score_val = ai_data.get('score', 0)
+                    
+                    res_col1, res_col2 = st.columns([1.5, 2.5])
+                    
+                    with res_col1:
+                        st.markdown(f"#### {icon} {ai_data.get('veredicto', 'N/A')}")
+                        st.progress(score_val / 100, text=f"Score de Convicción: {score_val}/100")
+                        st.markdown(f"**Táctica Sugerida:**")
+                        st.success(ai_data.get('estrategia', 'Sin estrategia.'))
+                        
+                    with res_col2:
+                        # Aquí volvemos al texto libre extenso y riguroso que querías, pero en un contenedor limpio
+                        with st.expander("📝 Leer Auditoría Forense Completa", expanded=True):
+                            st.write(ai_data.get('texto_libre', 'Sin análisis detallado.'))
+                
+                st.markdown("---")
                 
                 portfolio_results.append({
                     "Activo": ticker,
-                    "Dominio Sectorial": sector_gics,
-                    "Clasificación Heurística": archetype_label,
-                    "Expansión P/E": f"{raw_metrics.get('pe_ratio', 0):.1f}x",
-                    "Eficiencia (ROIC)": f"{raw_metrics.get('roic', 0)*100:.1f}%",
-                    "Apalancamiento (D/E)": f"{raw_metrics.get('debt_equity', 0):.2f}"
+                    "Veredicto": ai_data.get("veredicto"),
+                    "Score": score_val,
+                    "Arquetipo": archetype_label,
+                    "ROIC 5Y Avg": fmt_m(raw_metrics.get('roic_5y_avg'), True)
                 })
-            
-            ui_progress.progress((index + 1) / len(tickers))
         
         if portfolio_results:
-            st.markdown("### 📊 Matriz Consolidada de Exposición de Portafolio")
-            df_portfolio = pd.DataFrame(portfolio_results)
+            st.markdown("### 📋 Matriz de Ejecución del Portafolio")
+            df_portfolio = pd.DataFrame(portfolio_results).sort_values(by="Score", ascending=False).reset_index(drop=True)
             st.dataframe(df_portfolio, use_container_width=True)
 
 if __name__ == "__main__":
