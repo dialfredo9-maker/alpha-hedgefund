@@ -56,10 +56,10 @@ def fetch_sectorial_taxonomy(ticker: str) -> dict:
 def fetch_quantitative_metrics(ticker: str) -> dict:
     """
     Extrae ratios y vectores de crecimiento corporativo desde FMP.
-    Actualizado para compatibilidad con Plan Starter 2026.
+    Actualizado para compatibilidad total con Plan Starter 2026 (Endpoints Anuales).
     """
-    # Endpoints compatibles con suscripciones nuevas (post-2025)
-    url_metrics = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
+    # Endpoints Anuales (El plan Starter incluye acceso a "Annual Fundamentals and Ratios")
+    url_metrics = f"https://financialmodelingprep.com/api/v3/key-metrics/{ticker}?limit=1&apikey={FMP_API_KEY}"
     url_ratios = f"https://financialmodelingprep.com/api/v3/ratios/{ticker}?limit=1&apikey={FMP_API_KEY}"
     url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=4&apikey={FMP_API_KEY}"
     
@@ -77,15 +77,16 @@ def fetch_quantitative_metrics(ticker: str) -> dict:
         g_json = g_resp.json()
         
         metrics = {}
-        # Corrección: Acceso al índice [0] ya que FMP siempre devuelve una lista
+        # Extracción Anual desde Key-Metrics
         if m_json and isinstance(m_json, list):
             data = m_json[0]
-            metrics['pe_ratio'] = data.get('peRatioTTM', 0)
-            metrics['pb_ratio'] = data.get('pbRatioTTM', 0)
-            metrics['roe'] = data.get('roeTTM', 0)
-            metrics['roic'] = data.get('roicTTM', 0)
-            metrics['debt_equity'] = data.get('debtEquityRatioTTM', 0)
+            metrics['pe_ratio'] = data.get('peRatio', 0)
+            metrics['pb_ratio'] = data.get('pbRatio', 0)
+            metrics['roe'] = data.get('roe', 0)
+            metrics['roic'] = data.get('roic', 0)
+            metrics['debt_equity'] = data.get('debtToEquity', 0) # La variable aquí cambia a debtToEquity
 
+        # Extracción Anual desde Ratios
         if r_json and isinstance(r_json, list):
             r_data = r_json[0]
             metrics['peg_ratio'] = r_data.get('pegRatio', 0)
@@ -93,6 +94,7 @@ def fetch_quantitative_metrics(ticker: str) -> dict:
             metrics['ebitda_margin'] = r_data.get('ebitdaMargin', 0) 
             metrics['payout_ratio'] = r_data.get('payoutRatio', 0)
 
+        # Crecimiento de Ingresos
         if g_json and isinstance(g_json, list) and len(g_json) > 0:
             metrics['revenue_growth'] = g_json[0].get('revenueGrowth', 0)
             rev_history = [period.get('revenueGrowth', 0) for period in g_json]
