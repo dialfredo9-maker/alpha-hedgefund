@@ -28,7 +28,7 @@ try:
     GEMINI_API_KEY = st.secrets
     genai.configure(api_key=GEMINI_API_KEY)
 except KeyError:
-    st.error("Error Crítico de Configuración: Las claves de API (FMP_API_KEY, GEMINI_API_KEY) no están definidas en.streamlit/secrets.toml.")
+    st.error("Error Crítico de Configuración: Las claves de API no están definidas en.streamlit/secrets.toml.")
     st.stop()
 
 # Configuración del modelo LLM fundacional
