@@ -23,12 +23,12 @@ st.set_page_config(
 
 # Inicialización segura de claves de API
 try:
-    # Corrección: st.secrets se maneja como un diccionario
+    # Corrección: Acceso explícito a las llaves en el diccionario de secretos
     FMP_API_KEY = st.secrets["FMP_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
     genai.configure(api_key=GEMINI_API_KEY)
-except KeyError:
-    st.error("Error Crítico de Configuración: Las claves de API no están definidas en .streamlit/secrets.toml.")
+except (KeyError, Exception):
+    st.error("Error Crítico de Configuración: Las claves de API no están definidas correctamente en .streamlit/secrets.toml.")
     st.stop()
 
 GEMINI_MODEL_NAME = 'gemini-1.5-flash'
@@ -54,38 +54,48 @@ def fetch_sectorial_taxonomy(ticker: str) -> dict:
 
 @st.cache_data(ttl=3600)
 def fetch_quantitative_metrics(ticker: str) -> dict:
-    """Extrae ratios TTM y vectores de crecimiento corporativo desde FMP."""
-    url_ratios = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={FMP_API_KEY}"
+    """
+    Extrae ratios y vectores de crecimiento corporativo desde FMP.
+    Actualizado para compatibilidad con Plan Starter 2026.
+    """
+    # Endpoints compatibles con suscripciones nuevas (post-2025)
+    url_metrics = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
+    url_ratios = f"https://financialmodelingprep.com/api/v3/ratios/{ticker}?limit=1&apikey={FMP_API_KEY}"
     url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=4&apikey={FMP_API_KEY}"
     
     try:
-        ratios_response = requests.get(url_ratios, timeout=5)
-        growth_response = requests.get(url_growth, timeout=5)
+        m_resp = requests.get(url_metrics, timeout=5)
+        r_resp = requests.get(url_ratios, timeout=5)
+        g_resp = requests.get(url_growth, timeout=5)
         
-        ratios_response.raise_for_status()
-        growth_response.raise_for_status()
+        m_resp.raise_for_status()
+        r_resp.raise_for_status()
+        g_resp.raise_for_status()
         
-        ratios_json = ratios_response.json()
-        growth_json = growth_response.json()
+        m_json = m_resp.json()
+        r_json = r_resp.json()
+        g_json = g_resp.json()
         
         metrics = {}
-        # Corrección: FMP devuelve una LISTA de diccionarios. Se debe acceder al índice [0]
-        if ratios_json and isinstance(ratios_json, list):
-            data = ratios_json[0]
-            metrics['pe_ratio'] = data.get('priceEarningsRatioTTM', 0)
-            metrics['pb_ratio'] = data.get('priceToBookRatioTTM', 0)
-            metrics['peg_ratio'] = data.get('pegRatioTTM', 0)
-            metrics['roe'] = data.get('returnOnEquityTTM', 0)
-            metrics['roic'] = data.get('returnOnCapitalEmployedTTM', 0)
-            metrics['dividend_yield'] = data.get('dividendYieldTTM', 0)
+        # Corrección: Acceso al índice [0] ya que FMP siempre devuelve una lista
+        if m_json and isinstance(m_json, list):
+            data = m_json[0]
+            metrics['pe_ratio'] = data.get('peRatioTTM', 0)
+            metrics['pb_ratio'] = data.get('pbRatioTTM', 0)
+            metrics['roe'] = data.get('roeTTM', 0)
+            metrics['roic'] = data.get('roicTTM', 0)
             metrics['debt_equity'] = data.get('debtEquityRatioTTM', 0)
-            metrics['ebitda_margin'] = data.get('ebitdaMarginTTM', 0) 
-            metrics['payout_ratio'] = data.get('payoutRatioTTM', 0)
 
-        if growth_json and isinstance(growth_json, list) and len(growth_json) > 0:
-            # Corrección: Acceso a la propiedad dentro del primer elemento de la lista
-            metrics['revenue_growth'] = growth_json[0].get('revenueGrowth', 0)
-            rev_history = [period.get('revenueGrowth', 0) for period in growth_json]
+        if r_json and isinstance(r_json, list):
+            r_data = r_json[0]
+            metrics['peg_ratio'] = r_data.get('pegRatio', 0)
+            metrics['dividend_yield'] = r_data.get('dividendYield', 0)
+            metrics['ebitda_margin'] = r_data.get('ebitdaMargin', 0) 
+            metrics['payout_ratio'] = r_data.get('payoutRatio', 0)
+
+        if g_json and isinstance(g_json, list) and len(g_json) > 0:
+            metrics['revenue_growth'] = g_json[0].get('revenueGrowth', 0)
+            rev_history = [period.get('revenueGrowth', 0) for period in g_json]
             metrics['structural_decline'] = all(g < 0 for g in rev_history[:3])
         else:
             metrics['revenue_growth'] = 0
@@ -119,7 +129,7 @@ def evaluate_financial_archetype(sector: str, metrics: dict) -> tuple:
         if pb_ratio < 1.5 or pe_ratio < 15:
             return "Trampa de Valor (Value Trap)", "Anomalía detectada: La valoración baja es engañosa. Ocurre una contracción secular de ingresos exacerbada por un apalancamiento agresivo."
 
-    # 2. Motor Institucional: Financieras y Banca (Corrección: Lista de sectores añadida)
+    # 2. Motor Institucional: Financieras y Banca
     if sector in ['Financial Services', 'Financials', 'Banks']:
         if roe_p > 10.0 and pb_ratio < 1.5:
             return "Financiera Prime (P/B-ROE Model)", f"Eficiencia de patrimonio óptima (ROE: {roe_p:.1f}%) con descuento contable (P/B: {pb_ratio:.2f}x)."
@@ -128,14 +138,14 @@ def evaluate_financial_archetype(sector: str, metrics: dict) -> tuple:
         else:
             return "Financiera Consolidada", "Evaluación neutral en los modelos de fijación de precios bancarios."
 
-    # 3. Motor de Rendimiento: Utilities y REITs (Corrección: Lista de sectores añadida)
+    # 3. Motor de Rendimiento: Utilities y REITs
     if sector in ['Utilities', 'Real Estate']:
         if div_yield_p > 3.5 and metrics.get('payout_ratio', 1) < 0.95:
             return "Generador de Rendimiento Sólido", f"Flujos inelásticos asegurando un dividendo del {div_yield_p:.2f}%, sostenido por métricas de pago razonables."
         else:
             return "Rendimiento Amenazado (Cut Risk)", "El rendimiento ofrecido no compensa el riesgo del sector o el ratio de pago denota estrés inminente."
 
-    # 4. Motor de Hipercrecimiento: Rule of 40 (Corrección: Lista de sectores añadida)
+    # 4. Motor de Hipercrecimiento: Rule of 40
     if sector in ['Technology', 'Communication Services']:
         rule_of_40_score = rev_growth_p + ebitda_margin_p
         if rule_of_40_score >= 40.0:
@@ -146,7 +156,7 @@ def evaluate_financial_archetype(sector: str, metrics: dict) -> tuple:
     if 0 < peg < 1.0 and 10 < pe_ratio < 25:
         return "GARP (Growth at a Reasonable Price)", f"Oportunidad asimétrica; fuerte expansión no descontada (PEG ratio: {peg:.2f})."
 
-    # 6. Motor de Calidad y Moats (Corrección: Lista de sectores añadida)
+    # 6. Motor de Calidad y Moats
     base_roic_threshold = 15.0 
     if sector == 'Aerospace/Defense': 
         base_roic_threshold = 20.0
@@ -225,7 +235,7 @@ def main():
         st.subheader("Auditoría Multifactorial en Tiempo Real")
         ui_progress = st.progress(0)
         
-        # Corrección: Inicialización de lista de resultados
+        # Inicialización de lista de resultados para el DataFrame final
         portfolio_results = []
         
         for index, ticker in enumerate(tickers):
