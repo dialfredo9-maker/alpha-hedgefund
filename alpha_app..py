@@ -22,14 +22,22 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos CSS para mejorar la legibilidad institucional
+# =====================================================================
+# 1. CONFIGURACIÓN DE INFRAESTRUCTURA DE GRADO PROFESIONAL
+# =====================================================================
+st.set_page_config(
+    page_title="Terminal Quants PRO: Auditoría Forense", 
+    layout="wide", 
+    initial_sidebar_state="expanded"
+)
+
+# Estilos CSS corregidos
 st.markdown("""
     <style>
     .metric-card { background-color: #f0f2f6; padding: 15px; border-radius: 10px; border: 1px solid #d1d5db; }
     .warning-box { background-color: #fff3cd; color: #856404; padding: 15px; border-radius: 5px; border-left: 5px solid #ffeeba; }
     </style>
-""", unsafe_allow_items=True)
-
+""", unsafe_allow_html=True) # <-- Aquí estaba el error
 try:
     FMP_API_KEY = st.secrets["FMP_API_KEY"]
     GEMINI_API_KEY = st.secrets["GEMINI_API_KEY"]
