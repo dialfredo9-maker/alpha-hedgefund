@@ -31,7 +31,7 @@ def clean_series(df, key):
     if key in df.index:
         s = df.loc[key].dropna()
         if len(s) > 0:
-            return s[::-1]  # orden cronológico
+            return s[::-1]
     return None
 
 # --- FMP ---
@@ -45,25 +45,85 @@ def get_fmp_data(ticker):
     except:
         return {}
 
-# --- SCORE PRO ---
-def calcular_score(data):
+# --- SCORE ADAPTIVE ---
+def calcular_score(data, tipo):
+
     score = 0
 
-    if data["FCF_Margin"] and data["FCF_Margin"] > 0.15:
-        score += 2
-    if data["ROIC"] and data["ROIC"] > 0.15:
-        score += 2
-    if data["EV_FCF"] and data["EV_FCF"] < 25:
-        score += 2
-    if data["PEG"] and 0 < data["PEG"] < 1.5:
-        score += 2
-    if data["FCF_Yield"] and data["FCF_Yield"] > 0.04:
-        score += 2
+    ev_fcf = data["EV_FCF"]
+    fcf_margin = data["FCF_Margin"]
+    roic = data["ROIC"]
+    peg = data["PEG"]
+    fcf_yield = data["FCF_Yield"]
+    cagr = data["CAGR"]
 
-    # Penalizaciones reales
-    if data["ROIC"] is None:
+    # -------------------------
+    # 🟠 INDUSTRIAL (CLÁSICO)
+    # -------------------------
+    if tipo == "Industrial":
+
+        if fcf_margin and fcf_margin > 0.15:
+            score += 2
+        if roic and roic > 0.15:
+            score += 2
+        if ev_fcf and ev_fcf < 25:
+            score += 2
+        if peg and 0 < peg < 1.5:
+            score += 2
+        if fcf_yield and fcf_yield > 0.04:
+            score += 2
+
+    # -------------------------
+    # 🔵 SOFTWARE / PLATAFORMA
+    # -------------------------
+    else:
+
+        # CRECIMIENTO (motor principal)
+        if cagr:
+            if cagr > 0.25:
+                score += 3
+            elif cagr > 0.15:
+                score += 2
+            elif cagr > 0.10:
+                score += 1
+
+        # FCF (flexible)
+        if fcf_margin:
+            if fcf_margin > 0.15:
+                score += 2
+            elif fcf_margin > 0.05:
+                score += 1
+
+        # ROIC (bonus, no obligatorio)
+        if roic:
+            if roic > 0.25:
+                score += 2
+            elif roic > 0.12:
+                score += 1
+
+        # VALUACIÓN RELATIVA (más laxa)
+        if peg:
+            if 0 < peg < 2:
+                score += 2
+            elif peg < 3:
+                score += 1
+
+        # 🧨 ANTI BURBUJA REAL
+        if ev_fcf and ev_fcf > 100:
+            if not cagr or cagr < 0.15:
+                score -= 3
+
+        # ⚠️ NEGOCIO DÉBIL
+        if (fcf_margin is not None and fcf_margin < 0.05) and (not cagr or cagr < 0.10):
+            score -= 2
+
+    # -------------------------
+    # ⚠️ GLOBALES
+    # -------------------------
+    if roic is None:
         score -= 1
-    if data["PEG"] and data["PEG"] > 3:
+
+    if peg and peg > 5:
         score -= 1
 
     return max(score, 0)
@@ -131,11 +191,11 @@ if ticker:
                 st.error("❌ Datos incompletos")
             else:
 
-                # --- FCF REAL ---
+                # --- FCF ---
                 if fcf_direct is not None:
                     fcf = fcf_direct
                 else:
-                    fcf = op_cf + capex  # capex negativo correcto
+                    fcf = op_cf + capex
 
                 rev_ltm = rev.iloc[-1]
                 fcf_ltm = fcf.iloc[-1]
@@ -148,20 +208,15 @@ if ticker:
                 ev_fcf = safe_div(ev, fcf_ltm)
                 fcf_margin = safe_div(fcf_ltm, rev_ltm)
 
-                # CAGR REAL
                 cagr = None
                 if len(rev) > 1 and rev.iloc[0] > 0:
                     cagr = (rev.iloc[-1] / rev.iloc[0])**(1/(len(rev)-1)) - 1
 
                 fcf_yield = safe_div(fcf_ltm, market_cap)
 
-                # --- ROIC CORRECTO (MISMO PERIODO) ---
+                # --- ROIC ---
                 ebit_series = clean_series(inc, 'EBIT')
-
-                if ebit_series is not None:
-                    ebit = ebit_series.iloc[-1]
-                else:
-                    ebit = None
+                ebit = ebit_series.iloc[-1] if ebit_series is not None else None
 
                 tax_rate = 0.21
                 nopat = ebit * (1 - tax_rate) if ebit else None
@@ -175,7 +230,7 @@ if ticker:
                 invested_capital = debt + equity if equity else None
                 roic = safe_div(nopat, invested_capital)
 
-                # --- PEG FIX REAL (ERROR CLAVE ARREGLADO) ---
+                # --- PEG ---
                 peg = safe_div(pe, cagr) if cagr and pe else None
 
                 # --- FORWARD ---
@@ -191,7 +246,7 @@ if ticker:
                 fcf_forward = fcf_ltm + backlog_fcf
                 ev_fcf_forward = safe_div(ev, fcf_forward)
 
-                # --- DATA FINAL ---
+                # --- DATA ---
                 data = {
                     "EV_FCF": ev_fcf,
                     "FCF_Margin": fcf_margin,
@@ -201,7 +256,7 @@ if ticker:
                     "CAGR": cagr
                 }
 
-                score = calcular_score(data)
+                score = calcular_score(data, tipo)
                 sig = señal(score)
 
                 # --- DISPLAY ---
