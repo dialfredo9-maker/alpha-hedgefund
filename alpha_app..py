@@ -27,12 +27,25 @@ def safe_div(a, b):
 def pct(x):
     return round(x * 100, 2) if x is not None else None
 
-# --- FMP FETCH ---
-def get_fmp_data(ticker):
-    if not FMP_API_KEY:
+# ✅ --- CACHE YFINANCE ---
+@st.cache_data(ttl=300)
+def get_yf_data(ticker):
+    tk = yf.Ticker(ticker)
+    return {
+        "info": tk.info,
+        "financials": tk.financials,
+        "cashflow": tk.cashflow,
+        "balance": tk.balance_sheet,
+        "history": tk.history(period="5y")
+    }
+
+# ✅ --- CACHE FMP ---
+@st.cache_data(ttl=600)
+def get_fmp_data(ticker, api_key):
+    if not api_key:
         return {}
     try:
-        url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={FMP_API_KEY}"
+        url = f"https://financialmodelingprep.com/api/v3/key-metrics-ttm/{ticker}?apikey={api_key}"
         r = requests.get(url).json()
         return r[0] if r else {}
     except:
@@ -42,9 +55,9 @@ def get_fmp_data(ticker):
 def calcular_score(data):
     score = 0
 
-    if data["FCF_Margin"] and data["FCF_Margin"] > 15:
+    if data["FCF_Margin"] and data["FCF_Margin"] > 0.15:
         score += 2
-    if data["ROIC"] and data["ROIC"] > 20:
+    if data["ROIC"] and data["ROIC"] > 0.20:
         score += 2
     if data["EV_FCF"] and data["EV_FCF"] < 30:
         score += 2
@@ -95,14 +108,15 @@ ticker = st.text_input("Ticker").upper()
 
 if ticker:
 
-    tk = yf.Ticker(ticker)
-    fmp = get_fmp_data(ticker)
+    # ✅ USAR CACHE
+    data_yf = get_yf_data(ticker)
+    fmp = get_fmp_data(ticker, FMP_API_KEY)
 
     try:
-        info = tk.info
-        inc = tk.financials
-        cf = tk.cashflow
-        bs = tk.balance_sheet
+        info = data_yf["info"]
+        inc = data_yf["financials"]
+        cf = data_yf["cashflow"]
+        bs = data_yf["balance"]
 
         if inc.empty or cf.empty:
             st.error("❌ Datos insuficientes")
@@ -202,7 +216,7 @@ if ticker:
             st.metric("Score", f"{score}/10")
             st.metric("Señal", sig)
 
-            # --- IA ---
+            # --- IA SOLO CON BOTÓN (YA ESTABA BIEN) ---
             if st.button("Analizar IA"):
                 res = analizar_ia(data)
                 st.markdown(res)
