@@ -1,6 +1,6 @@
 """
 Plataforma Institucional de Análisis Fundamental y Clasificación de Arquetipos
-Arquitectura PRO: FMP API (Starter 5Y), Deep Metrics, Scoring y Gemini 2.5 Pro (JSON).
+Arquitectura PRO: FMP API v3 (Starter 5Y), Deep Metrics, Scoring y Gemini 2.5 Pro (JSON).
 """
 
 import streamlit as st
@@ -27,36 +27,38 @@ except (KeyError, Exception):
     st.stop()
 
 # =====================================================================
-# SELECCIÓN DEL MODELO DE GRADO INSTITUCIONAL
+# SELECCIÓN DEL MODELO: GEMINI 2.5 PRO
 # =====================================================================
-# Se exige gemini-2.5-pro para máximo razonamiento deductivo y rigor en JSON.
 GEMINI_MODEL_NAME = 'gemini-2.5-pro'
 
 # =====================================================================
-# 2. CAPA DE EXTRACCIÓN DE DATOS: DEEP METRICS (5 AÑOS)
+# 2. CAPA DE EXTRACCIÓN DE DATOS: RUTA OFICIAL V3 (ANTI-BLOQUEOS)
 # =====================================================================
 
 @st.cache_data(ttl=86400)
 def fetch_fmp_profile(ticker: str) -> dict:
     url_profile = f"https://financialmodelingprep.com/api/v3/profile/{ticker}?apikey={FMP_API_KEY}"
     try:
-        resp = requests.get(url_profile, timeout=5).json()
-        if resp and isinstance(resp, list):
-            data = resp[0]
-            return {
-                "sector": data.get("sector", "Desconocido"),
-                "industry": data.get("industry", "Desconocido"),
-                "price": data.get("price", 0.0)
-            }
+        resp = requests.get(url_profile, timeout=5)
+        if resp.status_code == 200:
+            data_list = resp.json()
+            if data_list and isinstance(data_list, list):
+                data = data_list[0]
+                return {
+                    "sector": data.get("sector", "Desconocido"),
+                    "industry": data.get("industry", "Desconocido"),
+                    "price": data.get("price", 0.0)
+                }
         return {"sector": "Desconocido", "industry": "Desconocido", "price": 0.0}
     except:
         return {"sector": "Desconocido", "industry": "Desconocido", "price": 0.0}
 
 @st.cache_data(ttl=3600)
 def fetch_quantitative_metrics(ticker: str) -> dict:
-    url_metrics = f"https://financialmodelingprep.com/stable/key-metrics?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
-    url_ratios = f"https://financialmodelingprep.com/stable/ratios?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
-    url_growth = f"https://financialmodelingprep.com/stable/financial-growth?symbol={ticker}&limit=5&apikey={FMP_API_KEY}"
+    """Motor de Extracción. Utiliza la ruta v3 garantizada para el Plan Starter."""
+    url_metrics = f"https://financialmodelingprep.com/api/v3/key-metrics/{ticker}?limit=5&apikey={FMP_API_KEY}"
+    url_ratios = f"https://financialmodelingprep.com/api/v3/ratios/{ticker}?limit=5&apikey={FMP_API_KEY}"
+    url_growth = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=5&apikey={FMP_API_KEY}"
     
     metrics = {}
     
@@ -68,57 +70,64 @@ def fetch_quantitative_metrics(ticker: str) -> dict:
         return sum(vals) / len(vals) if vals else "N/A"
 
     try:
-        m_resp = requests.get(url_metrics, timeout=5).json()
-        r_resp = requests.get(url_ratios, timeout=5).json()
-        g_resp = requests.get(url_growth, timeout=5).json()
+        m_resp = requests.get(url_metrics, timeout=5)
+        r_resp = requests.get(url_ratios, timeout=5)
+        g_resp = requests.get(url_growth, timeout=5)
+        
+        # SISTEMA DE AUDITORÍA: Si FMP bloquea, capturamos el motivo exacto
+        if m_resp.status_code != 200:
+            return {"_error": f"FMP Error HTTP {m_resp.status_code}: {m_resp.text}"}
+            
+        m_json = m_resp.json()
+        r_json = r_resp.json()
+        g_json = g_resp.json()
+        
+        if not m_json or len(m_json) == 0:
+            return {"_error": "El servidor de FMP devolvió una lista de datos vacía para este Ticker. Verifica los permisos de tu plan."}
         
         # 1. Extracción de Key Metrics (Actual y 5Y Avg)
-        if m_resp and isinstance(m_resp, list):
-            curr_m = m_resp[0]
-            metrics['pe_ratio'] = curr_m.get('peRatio', curr_m.get('priceEarningsRatio', "N/A"))
-            metrics['pb_ratio'] = curr_m.get('pbRatio', curr_m.get('priceToBookRatio', "N/A"))
-            metrics['roe'] = curr_m.get('roe', curr_m.get('returnOnEquity', "N/A"))
-            metrics['roic'] = curr_m.get('roic', curr_m.get('returnOnCapitalEmployed', "N/A"))
-            metrics['debt_equity'] = curr_m.get('debtToEquity', curr_m.get('debtEquityRatio', "N/A"))
-            
-            # Nuevas métricas avanzadas
-            metrics['fcf_yield'] = curr_m.get('freeCashFlowYield', "N/A")
-            metrics['ev_fcf'] = curr_m.get('evToFreeCashFlow', "N/A")
-            metrics['interest_coverage'] = curr_m.get('interestCoverage', "N/A")
-            metrics['current_ratio'] = curr_m.get('currentRatio', "N/A")
-            
-            # Promedios Históricos (5 Años)
-            metrics['roic_5y_avg'] = calc_avg(m_resp, 'roic', 'returnOnCapitalEmployed')
-            metrics['fcf_yield_5y_avg'] = calc_avg(m_resp, 'freeCashFlowYield')
+        curr_m = m_json[0]
+        metrics['pe_ratio'] = curr_m.get('peRatio', curr_m.get('priceEarningsRatio', "N/A"))
+        metrics['pb_ratio'] = curr_m.get('pbRatio', curr_m.get('priceToBookRatio', "N/A"))
+        metrics['roe'] = curr_m.get('roe', curr_m.get('returnOnEquity', "N/A"))
+        metrics['roic'] = curr_m.get('roic', curr_m.get('returnOnCapitalEmployed', "N/A"))
+        metrics['debt_equity'] = curr_m.get('debtToEquity', curr_m.get('debtEquityRatio', "N/A"))
+        
+        # Nuevas métricas avanzadas
+        metrics['fcf_yield'] = curr_m.get('freeCashFlowYield', "N/A")
+        metrics['ev_fcf'] = curr_m.get('evToFreeCashFlow', "N/A")
+        metrics['interest_coverage'] = curr_m.get('interestCoverage', "N/A")
+        
+        metrics['roic_5y_avg'] = calc_avg(m_json, 'roic', 'returnOnCapitalEmployed')
+        metrics['fcf_yield_5y_avg'] = calc_avg(m_json, 'freeCashFlowYield')
 
         # 2. Extracción de Ratios
-        if r_resp and isinstance(r_resp, list):
-            curr_r = r_resp[0]
+        if r_json and isinstance(r_json, list):
+            curr_r = r_json[0]
             metrics['peg_ratio'] = curr_r.get('pegRatio', "N/A")
             metrics['dividend_yield'] = curr_r.get('dividendYield', "N/A")
             metrics['ebitda_margin'] = curr_r.get('ebitdaMargin', "N/A")
-            metrics['margin_5y_avg'] = calc_avg(r_resp, 'ebitdaMargin')
+            metrics['margin_5y_avg'] = calc_avg(r_json, 'ebitdaMargin')
 
         # 3. Extracción de Crecimiento (Ventas y Efectivo)
-        if g_resp and isinstance(g_resp, list) and len(g_resp) > 0:
-            metrics['revenue_growth'] = g_resp[0].get('revenueGrowth', "N/A")
-            metrics['fcf_growth'] = g_resp[0].get('freeCashFlowGrowth', "N/A")
-            metrics['rd_growth'] = g_resp[0].get('rdexpenseGrowth', "N/A")
+        if g_json and isinstance(g_json, list) and len(g_json) > 0:
+            metrics['revenue_growth'] = g_json[0].get('revenueGrowth', "N/A")
+            metrics['fcf_growth'] = g_json[0].get('freeCashFlowGrowth', "N/A")
             
-            metrics['rev_growth_5y_avg'] = calc_avg(g_resp, 'revenueGrowth')
-            metrics['fcf_growth_5y_avg'] = calc_avg(g_resp, 'freeCashFlowGrowth')
+            metrics['rev_growth_5y_avg'] = calc_avg(g_json, 'revenueGrowth')
+            metrics['fcf_growth_5y_avg'] = calc_avg(g_json, 'freeCashFlowGrowth')
             
-            rev_history = [period.get('revenueGrowth', 0) for period in g_resp]
+            rev_history = [period.get('revenueGrowth', 0) for period in g_json]
             metrics['structural_decline'] = all(g is not None and g < 0 for g in rev_history[:3])
         else:
             metrics['revenue_growth'] = "N/A"
             metrics['fcf_growth'] = "N/A"
             metrics['structural_decline'] = False
 
-    except Exception:
-        pass 
+    except Exception as e:
+        return {"_error": f"Fallo interno del script: {str(e)}"}
 
-    clean_metrics = {k: (v if v is not None else "N/A") for k, v in metrics.items()}
+    clean_metrics = {k: (v if v is not None else "N/A") for k, v in metrics.items() if not k.startswith('_')}
     clean_metrics['structural_decline'] = metrics.get('structural_decline', False)
     return clean_metrics
 
@@ -141,7 +150,7 @@ def evaluate_financial_archetype(sector: str, metrics: dict) -> tuple:
     pe_ratio = get_num('pe_ratio')
 
     if metrics.get('structural_decline') or (debt_to_equity > 2.0 and int_coverage < 2.0 and int_coverage != 0):
-        return "Alerta de Solvencia / Value Trap", "Deterioro secular de ingresos combinado con cobertura de intereses crítica."
+        return "Alerta de Solvencia / Value Trap", "Deterioro secular combinado con cobertura de intereses crítica."
 
     if sector in ['Financial Services', 'Financials', 'Banks']:
         if get_num('roe') * 100 > 10.0 and 0 < pb_ratio < 1.5: return "Financiera Prime", "ROE de doble dígito transando a descuento contable."
@@ -191,14 +200,13 @@ def execute_ai_risk_audit(ticker: str, sector: str, archetype: str, metrics: dic
     }}
     """
     try:
-        # Se establece una temperatura bajísima para asegurar que el modelo no rompa el JSON
         model = genai.GenerativeModel(GEMINI_MODEL_NAME)
         response = model.generate_content(prompt, generation_config=genai.types.GenerationConfig(temperature=0.1))
         
         raw_text = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(raw_text)
     except Exception as e:
-        return {"texto_libre": f"Error IA: {str(e)}", "score": 0, "veredicto": "Hold", "estrategia": "Revisar conectividad API."}
+        return {"texto_libre": f"Error IA: {str(e)}", "score": 0, "veredicto": "Hold", "estrategia": "Revisar logs del modelo IA."}
 
 # =====================================================================
 # 5. UI: TABLERO DE CONTROL INSTITUCIONAL AVANZADO
@@ -232,8 +240,15 @@ def main():
                 
                 raw_metrics = fetch_quantitative_metrics(ticker)
                 
-                if not raw_metrics or raw_metrics.get('pe_ratio') == "N/A":
-                    st.warning(f"Datos fundamentales insuficientes en FMP para {ticker}.")
+                # INTERCEPTOR DE ERRORES: Muestra el mensaje exacto de FMP
+                if not raw_metrics or "_error" in raw_metrics:
+                    error_msg = raw_metrics.get('_error', 'Conexión fallida.') if raw_metrics else 'Conexión fallida.'
+                    st.error(f"Error de red/API para {ticker}: {error_msg}")
+                    st.markdown("---")
+                    continue
+                
+                if raw_metrics.get('pe_ratio') == "N/A" and raw_metrics.get('roic') == "N/A":
+                    st.warning(f"FMP no devolvió métricas fundamentales para {ticker}.")
                     st.markdown("---")
                     continue
                 
